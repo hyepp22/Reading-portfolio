@@ -1,3 +1,5 @@
 streamlit
-streamlit-gsheets
+streamlit-gsheets==0.1.0
 pandas
+st-gsheets-connection
+openpyxl
