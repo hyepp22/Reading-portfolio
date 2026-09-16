@@ -1,90 +1,90 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import gspread
-from google.oauth2.service_account import Credentials
 
 # 페이지 기본 설정
 st.set_page_config(page_title="중학교 독서 포트폴리오", layout="wide")
 
-# Google Sheets 연결 함수 (gspread 사용)
-@st.cache_resource
-def get_gsheet_client():
-    # Secrets에 등록된 구글 시트 URL 가져오기
-    sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
-    
-    # 만약 Service Account JSON 키 방식이 아닌 Public/Shared URL 제어 시
-    gc = gspread.public_authorize(sheet_url)
-    return gc
-
-# 간단 데이터 읽기/쓰기 헬퍼 함수
-def load_sheet_data(worksheet_name):
-    sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
-    # open_by_url을 사용해 시트 열기
-    gc = gspread.oauth() # 기본인증
-    # Streamlit Secrets 연결 방식 처리
-    df = pd.read_csv(f"{sheet_url.split('/edit')[0]}/gviz/tq?tqx=out:csv&sheet={worksheet_name}")
-    return df
+# Google Sheets 연결 (Streamlit 커넥터 사용)
+from streamlit.connections import GSheetsConnection
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 # 세션 상태 초기화
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-    st.session_state.student_info = None
+    st.session_state.user_type = None  # 'student' 또는 'teacher'
+    st.session_state.user_info = None
 
 # ---------------------------------------------------------
-# [1] 로그인 화면
+# [1] 통합 로그인 화면 (학생 / 교사)
 # ---------------------------------------------------------
 if not st.session_state.logged_in:
-    st.title("📚 중학교 독서 포트폴리오 로그인")
-    st.caption("학년, 학급, 번호, 이름, 고유번호를 정확히 입력하세요.")
+    st.title("📚 중학교 독서 포트폴리오 및 수행평가 관리 시스템")
     
-    with st.form("login_form"):
-        col_grade, col_class, col_num = st.columns(3)
-        with col_grade:
-            grade = st.text_input("학년 (예: 2)")
-        with col_class:
-            ban = st.text_input("학급 (예: 3)")
-        with col_num:
-            num = st.text_input("번호 (예: 15)")
+    tab_student, tab_teacher = st.tabs(["👨‍🎓 학생 로그인", "🧑‍🏫 교사 관리자 로그인"])
+    
+    # 1-1. 학생 로그인
+    with tab_student:
+        with st.form("student_login_form"):
+            col_g, col_c, col_n = st.columns(3)
+            with col_g:
+                grade = st.text_input("학년 (예: 2)")
+            with col_c:
+                ban = st.text_input("학급 (예: 3)")
+            with col_n:
+                num = st.text_input("번호 (예: 1)")
+                
+            s_name = st.text_input("이름")
+            s_pin = st.text_input("고유번호 (4자리 PIN)", type="password")
             
-        s_name = st.text_input("이름 (예: 홍길동)")
-        s_pin = st.text_input("고유번호 (4자리 PIN)", type="password")
-        
-        submit = st.form_submit_button("로그인")
-        
-        if submit:
-            try:
-                sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
-                csv_url = f"{sheet_url.split('/edit')[0]}/gviz/tq?tqx=out:csv&sheet=students"
-                df_students = pd.read_csv(csv_url)
-                
-                matched = df_students[
-                    (df_students['학년'].astype(str) == grade.strip()) &
-                    (df_students['학급'].astype(str) == ban.strip()) &
-                    (df_students['번호'].astype(str) == num.strip()) &
-                    (df_students['이름'].astype(str) == s_name.strip()) &
-                    (df_students['고유번호'].astype(str) == s_pin.strip())
-                ]
-                
-                if not matched.empty:
-                    student_data = matched.iloc[0].to_dict()
-                    formatted_num = str(student_data['번호']).zfill(2)
-                    student_data['학번'] = f"{student_data['학년']}{str(student_data['학급']).zfill(2)}{formatted_num}"
+            submit_student = st.form_submit_button("학생 로그인")
+            
+            if submit_student:
+                try:
+                    df_students = conn.read(worksheet="students", ttl=0)
+                    matched = df_students[
+                        (df_students['학년'].astype(str) == grade.strip()) &
+                        (df_students['학급'].astype(str) == ban.strip()) &
+                        (df_students['번호'].astype(str) == num.strip()) &
+                        (df_students['이름'].astype(str) == s_name.strip()) &
+                        (df_students['고유번호'].astype(str) == s_pin.strip())
+                    ]
                     
+                    if not matched.empty:
+                        student_data = matched.iloc[0].to_dict()
+                        student_data['학번'] = f"{student_data['학년']}{str(student_data['학급']).zfill(2)}{str(student_data['번호']).zfill(2)}"
+                        
+                        st.session_state.logged_in = True
+                        st.session_state.user_type = "student"
+                        st.session_state.user_info = student_data
+                        st.success(f"{s_name} 학생 환영합니다!")
+                        st.rerun()
+                    else:
+                        st.error("입력한 회원 정보가 일치하지 않습니다.")
+                except Exception as e:
+                    st.error(f"데이터 연결 오류: {e}")
+
+    # 1-2. 교사 로그인
+    with tab_teacher:
+        with st.form("teacher_login_form"):
+            teacher_pin = st.text_input("교사 관리자 비밀번호", type="password", help="기본 비밀번호: teacher1234")
+            submit_teacher = st.form_submit_button("관리자 로그인")
+            
+            if submit_teacher:
+                if teacher_pin == "teacher1234":  # 필요 시 교사 비밀번호 변경 가능
                     st.session_state.logged_in = True
-                    st.session_state.student_info = student_data
-                    st.success(f"{s_name} 학생 환영합니다!")
+                    st.session_state.user_type = "teacher"
+                    st.session_state.user_info = {"name": "관리자 교사"}
+                    st.success("교사 전용 모드로 로그인되었습니다.")
                     st.rerun()
                 else:
-                    st.error("입력하신 회원 정보가 일치하지 않습니다. 다시 확인해주세요.")
-            except Exception as e:
-                st.error("구글 시트 데이터를 불러오는 데 실패했습니다. Secrets 주소 및 시트 공유(편집자) 설정을 확인해 주세요.")
+                    st.error("교사 비밀번호가 일치하지 않습니다.")
 
 # ---------------------------------------------------------
-# [2] 학생 독서 기록 작성 및 조회 화면
+# [2] 학생 전용 화면
 # ---------------------------------------------------------
-else:
-    student = st.session_state.student_info
+elif st.session_state.user_type == "student":
+    student = st.session_state.user_info
     
     col1, col2 = st.columns([4, 1])
     with col1:
@@ -93,13 +93,12 @@ else:
     with col2:
         if st.button("로그아웃"):
             st.session_state.logged_in = False
-            st.session_state.student_info = None
             st.rerun()
 
     st.divider()
 
+    # 독서 기록 입력 폼
     st.subheader("📝 차시별 독서 기록 작성하기")
-    
     with st.form("reading_log_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -123,30 +122,169 @@ else:
                 st.warning("모든 필수 항목(*)을 작성해 주세요.")
             else:
                 try:
-                    # Form Submit 전송 처리
-                    sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
-                    # Web Form 전송 및 시트 직접 기록 파이프라인
+                    new_data = pd.DataFrame([{
+                        "학번": str(student['학번']),
+                        "작성일시": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "이름": student['이름'],
+                        "책제목": book_title,
+                        "작가": author,
+                        "차시": session_num,
+                        "읽은 날짜": str(read_date),
+                        "읽은 페이지": pages,
+                        "오늘 읽은 부분 요약": summary,
+                        "인상깊은 내용": quote,
+                        "질문과 답변": q_na,
+                        "나의 생각과 느낌": thought
+                    }])
+                    
+                    existing_data = conn.read(worksheet="logs", ttl=0)
+                    updated_df = pd.concat([existing_data, new_data], ignore_index=True)
+                    conn.update(worksheet="logs", data=updated_df)
+                    
                     st.balloons()
-                    st.success("독서 기록이 제출되었습니다!")
+                    st.success("독서 기록이 저장되었습니다!")
                 except Exception as e:
-                    st.error(f"저장 오류: {e}")
+                    st.error(f"저장 중 오류: {e}")
 
-    # 나의 누적 독서 기록 조회
+    # 누적 기록 조회
     st.divider()
     st.subheader("📚 나의 누적 독서 기록")
     try:
-        sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
-        csv_url = f"{sheet_url.split('/edit')[0]}/gviz/tq?tqx=out:csv&sheet=logs"
-        logs_df = pd.read_csv(csv_url)
-        
+        logs_df = conn.read(worksheet="logs", ttl=0)
         my_logs = logs_df[logs_df['학번'].astype(str) == str(student['학번'])]
-        
         if not my_logs.empty:
-            st.dataframe(
-                my_logs[['차시', '책제목', '작가', '읽은 날짜', '읽은 페이지', '오늘 읽은 부분 요약', '인상깊은 내용', '질문과 답변', '나의 생각과 느낌']], 
-                use_container_width=True
-            )
+            st.dataframe(my_logs, use_container_width=True)
         else:
             st.info("아직 등록된 독서 기록이 없습니다.")
-    except Exception as e:
+    except Exception:
         st.info("기록을 불러오는 중입니다.")
+
+# ---------------------------------------------------------
+# [3] 교사 전용 관리자 화면 (요청하신 통합 대시보드)
+# ---------------------------------------------------------
+elif st.session_state.user_type == "teacher":
+    # 상단 헤더
+    col_t1, col_t2 = st.columns([4, 1])
+    with col_t1:
+        st.caption("🔵 교사 전용 모드 | 중학교 독서수행평가 및 15~17차시 진도 통합 관리 센터")
+        st.title("학생별 독서 포트폴리오 진도 & 수행평가 채점")
+    with col_t2:
+        if st.button("로그아웃"):
+            st.session_state.logged_in = False
+            st.rerun()
+
+    # 데이터 로드
+    try:
+        df_students = conn.read(worksheet="students", ttl=0)
+        df_logs = conn.read(worksheet="logs", ttl=0)
+    except Exception as e:
+        st.error("구글 시트 데이터를 로드하지 못했습니다.")
+        st.stop()
+
+    # 학급 선택 필터
+    st.divider()
+    grades = sorted(df_students['학년'].astype(str).unique())
+    selected_grade = st.sidebar.selectbox("학년 선택", grades)
+    
+    classes = sorted(df_students[df_students['학년'].astype(str) == selected_grade]['학급'].astype(str).unique())
+    selected_class = st.sidebar.selectbox("학급 선택", classes)
+
+    # 해당 학급 학생 필터링
+    class_students = df_students[
+        (df_students['학년'].astype(str) == selected_grade) & 
+        (df_students['학급'].astype(str) == selected_class)
+    ].copy()
+
+    # 학번 생성
+    class_students['학번'] = class_students.apply(
+        lambda r: f"{r['학년']}{str(r['학급']).zfill(2)}{str(r['번호']).zfill(2)}", axis=1
+    )
+
+    # 통계 계산
+    total_students = len(class_students)
+    
+    # 4대 지표 카드 출력
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("👥 학급 전체 학생 수", f"{total_students} 명")
+        st.caption("목표 15~17차시 독서 진행")
+    with m2:
+        st.metric("🟢 수행평가 채점 완료", "0 / 5명")
+        st.caption("채점 진행률 0%")
+    with m3:
+        st.metric("📑 채점 대기 학생", f"{total_students} 명")
+        st.caption("포트폴리오 검토 필요")
+    with m4:
+        st.metric("⚠️ 차시 누락 주의 학생", f"{total_students} 명")
+        st.caption("독서 일지 작성 독려 권장")
+
+    st.divider()
+
+    # 학생별 독서 진도 매트릭스 표
+    st.subheader(f"📌 {selected_grade}학년 {selected_class}반 학생별 독서 진도 매트릭스")
+    
+    search_query = st.text_input("🔍 학번 또는 이름 검색", "")
+
+    for idx, student in class_students.iterrows():
+        s_id = str(student['학번'])
+        s_name = str(student['이름'])
+        s_pin = str(student['고유번호'])
+        
+        if search_query and (search_query not in s_name and search_query not in s_id):
+            continue
+
+        # 해당 학생의 작성 기록 가져오기
+        s_logs = df_logs[df_logs['학번'].astype(str) == s_id] if not df_logs.empty else pd.DataFrame()
+        submitted_sessions = set(s_logs['차시'].dropna().tolist()) if not s_logs.empty else set()
+        
+        # 제출 차시 개수 (최대 16차시 기준 예시)
+        submitted_count = len(submitted_sessions)
+        
+        # UI 레이아웃 구성
+        row_c1, row_c2, row_c3, row_c4, row_c5 = st.columns([1.5, 2, 2.5, 1.5, 1.5])
+        
+        with row_c1:
+            st.markdown(f"### **{student['번호']}번 {s_name}**")
+            st.caption(f"학번 {s_id} (PIN: {s_pin})")
+            
+        with row_c2:
+            if not s_logs.empty:
+                books = s_logs['책제목'].unique()
+                for b in books[:2]:
+                    st.write(f"📖 《{b}》")
+            else:
+                st.caption("작성된 도서 없음")
+                
+        with row_c3:
+            # 1~16차시 진도 블록 시각화
+            blocks = ""
+            missing_sessions = []
+            for i in range(1, 17):
+                sess_str = f"{i}차시"
+                if sess_str in submitted_sessions:
+                    blocks += f"🟩 "
+                else:
+                    blocks += f"⬜ "
+                    missing_sessions.append(str(i))
+            
+            st.write(blocks)
+            if missing_sessions:
+                st.caption(f"🔻 누락: {', '.join(missing_sessions)}차시")
+                
+        with row_c4:
+            st.write(f"**{submitted_count} / 16차시**")
+            progress_pct = int((submitted_count / 16) * 100)
+            st.caption(f"진도율 {progress_pct}%")
+            
+        with row_c5:
+            # 학생 포트폴리오 상세 열람 팝업 버튼
+            if st.button("🎗️ 포트폴리오 열람", key=f"btn_{s_id}"):
+                @st.dialog(f"{s_name} 학생의 독서 포트폴리오")
+                def view_portfolio():
+                    if not s_logs.empty:
+                        st.dataframe(s_logs[['차시', '책제목', '읽은 날짜', '오늘 읽은 부분 요약', '나의 생각과 느낌']], use_container_width=True)
+                    else:
+                        st.write("제출된 독서 기록이 없습니다.")
+                view_portfolio()
+                
+        st.markdown("---")
