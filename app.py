@@ -1,17 +1,17 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import requests
 
 # 페이지 기본 설정
 st.set_page_config(page_title="중학교 독서 포트폴리오", layout="wide")
 
-# 구글 시트 데이터 읽기 헬퍼 함수 (소수점 .0 자동 제거 처리)
+# 구글 시트 데이터 읽기 헬퍼 함수
 def load_data(worksheet_name):
     try:
         sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
         base_url = sheet_url.split('/edit')[0]
         csv_url = f"{base_url}/gviz/tq?tqx=out:csv&sheet={worksheet_name}"
-        # dtype=str로 읽어와 소수점 변환을 방지하고 .0 접미사 및 공백 제거
         df = pd.read_csv(csv_url, dtype=str)
         return df.fillna("").apply(lambda x: x.str.replace(r'\.0$', '', regex=True).str.strip())
     except Exception:
@@ -130,8 +130,33 @@ elif st.session_state.user_type == "student":
             if not (book_title and author and summary and quote and q_na and thought):
                 st.warning("모든 필수 항목(*)을 작성해 주세요.")
             else:
-                st.balloons()
-                st.success("독서 기록 제출이 완료되었습니다!")
+                # 구글 Apps Script Web App URL을 Secrets에서 읽어옵니다.
+                if "script_url" in st.secrets:
+                    payload = {
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "student_id": student['학번'],
+                        "name": student['이름'],
+                        "session": session_num,
+                        "book_title": book_title,
+                        "author": author,
+                        "read_date": str(read_date),
+                        "pages": pages,
+                        "summary": summary,
+                        "quote": quote,
+                        "q_na": q_na,
+                        "thought": thought
+                    }
+                    try:
+                        res = requests.post(st.secrets["script_url"], json=payload)
+                        if res.status_code == 200:
+                            st.balloons()
+                            st.success("독서 기록이 구글 시트에 무사히 저장되었습니다!")
+                        else:
+                            st.error("구글 시트 전송 중 오류가 발생했습니다.")
+                    except Exception as e:
+                        st.error(f"저장 실패: {e}")
+                else:
+                    st.warning("구글 시트 쓰기 연동(script_url) 설정이 안 되어 있어 실제 저장되지 않습니다. 아래 연동 가이드를 참조하세요.")
 
     st.divider()
     st.subheader("📚 나의 누적 독서 기록")
