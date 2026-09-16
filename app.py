@@ -47,10 +47,11 @@ if not st.session_state.logged_in:
             submit_student = st.form_submit_button("학생 로그인")
             
             if submit_student:
-               df_students = load_data("students")
-    
-    # 🔍 [테스트용] 구글 시트에서 실제로 읽어온 데이터 화면에 표시해보기
-    st.write("구글 시트에서 불러온 데이터:", df_students)
+                df_students = load_data("students")
+                
+                # 🔍 데이터 확인용 (로그인 시 구글 시트에서 읽어온 실제 데이터 표출)
+                st.write("🔍 [구글 시트 연동 데이터 확인]:", df_students)
+                
                 if not df_students.empty:
                     matched = df_students[
                         (df_students['학년'] == grade.strip()) &
@@ -77,7 +78,7 @@ if not st.session_state.logged_in:
     # 1-2. 교사 로그인
     with tab_teacher:
         with st.form("teacher_login_form"):
-            TEACHER_PASSWORD = "teacher1234"  # 원하시는 교사 비밀번호 설정
+            TEACHER_PASSWORD = "teacher1234"
             teacher_pin = st.text_input("교사 관리자 비밀번호", type="password")
             submit_teacher = st.form_submit_button("관리자 로그인")
             
