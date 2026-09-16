@@ -47,7 +47,10 @@ if not st.session_state.logged_in:
             submit_student = st.form_submit_button("학생 로그인")
             
             if submit_student:
-                df_students = load_data("students")
+    df_students = load_data("students")
+    
+    # 🔍 [테스트용] 구글 시트에서 실제로 읽어온 데이터 화면에 표시해보기
+    st.write("구글 시트에서 불러온 데이터:", df_students)
                 if not df_students.empty:
                     matched = df_students[
                         (df_students['학년'] == grade.strip()) &
