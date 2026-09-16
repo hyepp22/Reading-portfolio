@@ -6,7 +6,7 @@ from datetime import datetime
 st.set_page_config(page_title="중학교 독서 포트폴리오", layout="wide")
 
 # Google Sheets 연결 (Streamlit 커넥터 사용)
-from streamlit.connections import GSheetsConnection
+from streamlit_gsheets import GSheetsConnection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # 세션 상태 초기화
