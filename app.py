@@ -219,7 +219,7 @@ elif st.session_state.user_type == "teacher":
         with row_c4:
             st.write(f"{len(submitted_sessions)} / 16 차시")
             
-        st.markdown("---")import streamlit as st
+        st.markdown("---")
 import pandas as pd
 from datetime import datetime
 
