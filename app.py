@@ -5,21 +5,22 @@ from datetime import datetime
 # 페이지 기본 설정
 st.set_page_config(page_title="중학교 독서 포트폴리오", layout="wide")
 
-# 구글 시트 데이터 읽기 헬퍼 함수
+# 구글 시트 데이터 읽기 헬퍼 함수 (소수점 .0 자동 제거 처리)
 def load_data(worksheet_name):
     try:
         sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
         base_url = sheet_url.split('/edit')[0]
         csv_url = f"{base_url}/gviz/tq?tqx=out:csv&sheet={worksheet_name}"
-        df = pd.read_csv(csv_url)
-        return df.astype(str).apply(lambda x: x.str.strip())
+        # dtype=str로 읽어와 소수점 변환을 방지하고 .0 접미사 및 공백 제거
+        df = pd.read_csv(csv_url, dtype=str)
+        return df.fillna("").apply(lambda x: x.str.replace(r'\.0$', '', regex=True).str.strip())
     except Exception:
         return pd.DataFrame()
 
 # 세션 상태 초기화
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-    st.session_state.user_type = None
+    st.session_state.user_type = None  # 'student' 또는 'teacher'
     st.session_state.user_info = None
 
 # ---------------------------------------------------------
@@ -49,9 +50,6 @@ if not st.session_state.logged_in:
             if submit_student:
                 df_students = load_data("students")
                 
-                # 🔍 데이터 확인용 (로그인 시 구글 시트에서 읽어온 실제 데이터 표출)
-                st.write("🔍 [구글 시트 연동 데이터 확인]:", df_students)
-                
                 if not df_students.empty:
                     matched = df_students[
                         (df_students['학년'] == grade.strip()) &
@@ -78,7 +76,7 @@ if not st.session_state.logged_in:
     # 1-2. 교사 로그인
     with tab_teacher:
         with st.form("teacher_login_form"):
-            TEACHER_PASSWORD = "teacher1234"
+            TEACHER_PASSWORD = "teacher1234"  # 비밀번호 변경 필요 시 수정
             teacher_pin = st.text_input("교사 관리자 비밀번호", type="password")
             submit_teacher = st.form_submit_button("관리자 로그인")
             
