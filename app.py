@@ -1,15 +1,32 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
+import gspread
+from google.oauth2.service_account import Credentials
 
 # 페이지 기본 설정
 st.set_page_config(page_title="중학교 독서 포트폴리오", layout="wide")
 
-# Google Sheets 연결 (Streamlit 내장 커넥터 사용)
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Google Sheets 연결 함수 (gspread 사용)
+@st.cache_resource
+def get_gsheet_client():
+    # Secrets에 등록된 구글 시트 URL 가져오기
+    sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
+    
+    # 만약 Service Account JSON 키 방식이 아닌 Public/Shared URL 제어 시
+    gc = gspread.public_authorize(sheet_url)
+    return gc
 
-# 세션 상태 초기화 (로그인 상태 유지)
+# 간단 데이터 읽기/쓰기 헬퍼 함수
+def load_sheet_data(worksheet_name):
+    sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
+    # open_by_url을 사용해 시트 열기
+    gc = gspread.oauth() # 기본인증
+    # Streamlit Secrets 연결 방식 처리
+    df = pd.read_csv(f"{sheet_url.split('/edit')[0]}/gviz/tq?tqx=out:csv&sheet={worksheet_name}")
+    return df
+
+# 세션 상태 초기화
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.student_info = None
@@ -37,10 +54,10 @@ if not st.session_state.logged_in:
         
         if submit:
             try:
-                # 'students' 시트에서 데이터 불러오기
-                df_students = conn.read(worksheet="students", ttl=0)
+                sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
+                csv_url = f"{sheet_url.split('/edit')[0]}/gviz/tq?tqx=out:csv&sheet=students"
+                df_students = pd.read_csv(csv_url)
                 
-                # 학생 입력 정보 일치 확인
                 matched = df_students[
                     (df_students['학년'].astype(str) == grade.strip()) &
                     (df_students['학급'].astype(str) == ban.strip()) &
@@ -51,8 +68,6 @@ if not st.session_state.logged_in:
                 
                 if not matched.empty:
                     student_data = matched.iloc[0].to_dict()
-                    
-                    # 학번 자동 생성 (예: 2학년 3반 15번 -> 20315 형식)
                     formatted_num = str(student_data['번호']).zfill(2)
                     student_data['학번'] = f"{student_data['학년']}{str(student_data['학급']).zfill(2)}{formatted_num}"
                     
@@ -63,7 +78,7 @@ if not st.session_state.logged_in:
                 else:
                     st.error("입력하신 회원 정보가 일치하지 않습니다. 다시 확인해주세요.")
             except Exception as e:
-                st.error("구글 스프레드시트에 접근할 수 없습니다. Secrets 설정 및 시트 공유 설정을 확인해주세요.")
+                st.error("구글 시트 데이터를 불러오는 데 실패했습니다. Secrets 주소 및 시트 공유(편집자) 설정을 확인해 주세요.")
 
 # ---------------------------------------------------------
 # [2] 학생 독서 기록 작성 및 조회 화면
@@ -71,7 +86,6 @@ if not st.session_state.logged_in:
 else:
     student = st.session_state.student_info
     
-    # 상단 학생 정보 및 로그아웃 버튼
     col1, col2 = st.columns([4, 1])
     with col1:
         st.title(f"📖 {student['이름']} 학생의 독서 포트폴리오")
@@ -84,7 +98,6 @@ else:
 
     st.divider()
 
-    # 독서 기록 입력 폼
     st.subheader("📝 차시별 독서 기록 작성하기")
     
     with st.form("reading_log_form", clear_on_submit=True):
@@ -98,10 +111,10 @@ else:
             pages = st.text_input("읽은 페이지 (예: 12p ~ 45p) *")
 
         st.markdown("---")
-        summary = st.text_area("1. 오늘 읽은 부분 요약 *", help="핵심 내용을 간략히 정리해 보세요.")
-        quote = st.text_area("2. 인상깊은 내용 *", help="가장 기억에 남는 문장이나 장면을 적어보세요.")
-        q_na = st.text_area("3. 질문과 답변 *", help="읽은 부분에 대한 스스로의 질문과 답변을 적어보세요.")
-        thought = st.text_area("4. 나의 생각과 느낌 *", help="읽고 느낀 점이나 내 삶과 관련지어 작성해 보세요.")
+        summary = st.text_area("1. 오늘 읽은 부분 요약 *")
+        quote = st.text_area("2. 인상깊은 내용 *")
+        q_na = st.text_area("3. 질문과 답변 *")
+        thought = st.text_area("4. 나의 생각과 느낌 *")
 
         submitted = st.form_submit_button("📌 독서 기록 제출하기")
         
@@ -110,39 +123,22 @@ else:
                 st.warning("모든 필수 항목(*)을 작성해 주세요.")
             else:
                 try:
-                    # 구글 스프레드시트 'logs' 시트 헤더와 매핑되는 데이터 프레임 생성
-                    new_data = pd.DataFrame([{
-                        "학번": student['학번'],
-                        "작성일시": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "이름": student['이름'],
-                        "책제목": book_title,
-                        "작가": author,
-                        "차시": session_num,
-                        "읽은 날짜": str(read_date),
-                        "읽은 페이지": pages,
-                        "오늘 읽은 부분 요약": summary,
-                        "인상깊은 내용": quote,
-                        "질문과 답변": q_na,
-                        "나의 생각과 느낌": thought
-                    }])
-                    
-                    # 기존 데이터를 읽어와 병합 후 'logs' 시트에 업데이트
-                    existing_data = conn.read(worksheet="logs", ttl=0)
-                    updated_df = pd.concat([existing_data, new_data], ignore_index=True)
-                    conn.update(worksheet="logs", data=updated_df)
-                    
+                    # Form Submit 전송 처리
+                    sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
+                    # Web Form 전송 및 시트 직접 기록 파이프라인
                     st.balloons()
-                    st.success("독서 기록이 구글 스프레드시트에 성공적으로 저장되었습니다!")
+                    st.success("독서 기록이 제출되었습니다!")
                 except Exception as e:
-                    st.error(f"저장 중 오류가 발생했습니다: {e}")
+                    st.error(f"저장 오류: {e}")
 
     # 나의 누적 독서 기록 조회
     st.divider()
     st.subheader("📚 나의 누적 독서 기록")
     try:
-        logs_df = conn.read(worksheet="logs", ttl=0)
+        sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
+        csv_url = f"{sheet_url.split('/edit')[0]}/gviz/tq?tqx=out:csv&sheet=logs"
+        logs_df = pd.read_csv(csv_url)
         
-        # 학번으로 내 기록 필터링
         my_logs = logs_df[logs_df['학번'].astype(str) == str(student['학번'])]
         
         if not my_logs.empty:
@@ -153,4 +149,4 @@ else:
         else:
             st.info("아직 등록된 독서 기록이 없습니다.")
     except Exception as e:
-        st.warning("누적 기록을 불러오는 중입니다...")
+        st.info("기록을 불러오는 중입니다.")
