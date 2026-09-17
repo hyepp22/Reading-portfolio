@@ -7,7 +7,7 @@ import openai
 DB_FILE = "reading_portfolio.db"
 
 # -------------------------------------------------------------------
-# 1. DB 초기화 (기존 DB 구버전 자동 마이그레이션 포함)
+# 1. DB 초기화 (기존 DB 구버전 자동 마이그레이션 및 PK 구조 재설정)
 # -------------------------------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -68,13 +68,17 @@ def init_db():
         )
     ''')
 
-    # 기존 allowed_class_dates 테이블 구조 검사 후 grade 컬럼 없으면 삭제 후 재생성 (PK 충돌 방지)
+    # [수정] allowed_class_dates 테이블의 PK 구조 검사 (grade 포함 여부 및 PK 3개 조건 검사)
     c.execute("PRAGMA table_info(allowed_class_dates)")
-    cols = [col[1] for col in c.fetchall()]
-    if len(cols) > 0 and 'grade' not in cols:
-        c.execute("DROP TABLE allowed_class_dates")
+    cols_info = c.fetchall()
+    if len(cols_info) > 0:
+        cols = [col[1] for col in cols_info]
+        pk_count = sum([1 for col in cols_info if col[5] > 0]) # pk 설정된 컬럼 개수
+        # grade 컬럼이 없거나 PK가 3개가 아닌 구버전 구조면 삭제
+        if 'grade' not in cols or pk_count < 3:
+            c.execute("DROP TABLE allowed_class_dates")
 
-    # 4) 학년/학반별 작성 허용 날짜 테이블
+    # 4) 학년/학반별 작성 허용 날짜 테이블 생성 (정확한 composite PK 지정)
     c.execute('''
         CREATE TABLE IF NOT EXISTS allowed_class_dates (
             grade TEXT,
@@ -85,7 +89,7 @@ def init_db():
         )
     ''')
 
-    # [마이그레이션] باقي 테이블들에 grade 컬럼 누락 시 자동 추가
+    # [마이그레이션] 나머지 테이블들에 grade 컬럼 누락 시 자동 추가
     tables_to_check = ['student_list', 'reading_logs', 'evaluations']
     for table in tables_to_check:
         c.execute(f"PRAGMA table_info({table})")
