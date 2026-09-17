@@ -2,20 +2,21 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime, date
-import openai  # AI 자동 채점용 (pip install openai)
+import openai
 
 DB_FILE = "reading_portfolio.db"
 
 # -------------------------------------------------------------------
-# 1. DB 초기화
+# 1. DB 초기화 (학반별 날짜 제어 테이블 포함)
 # -------------------------------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # 독서 기록 테이블
+    # 독서 기록 테이블 (class_name 학반 추가)
     c.execute('''
         CREATE TABLE IF NOT EXISTS reading_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            class_name TEXT,
             student_id TEXT,
             student_name TEXT,
             pin TEXT,
@@ -49,15 +50,17 @@ def init_db():
             cat3_total INT,
             total_score INT,
             feedback TEXT,
-            is_auto_graded INTEGER DEFAULT 0,
             evaluated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(student_id, book_title) ON CONFLICT REPLACE
         )
     ''')
-    # 수업 진행 날짜 관리 테이블 (교사가 허용한 날짜)
+    # 학반별 작성 허용 날짜 테이블 (학반 + 날짜 복합키)
     c.execute('''
-        CREATE TABLE IF NOT EXISTS allowed_dates (
-            allowed_date TEXT PRIMARY KEY
+        CREATE TABLE IF NOT EXISTS allowed_class_dates (
+            class_name TEXT,
+            allowed_date TEXT,
+            session_num TEXT,
+            PRIMARY KEY (class_name, allowed_date)
         )
     ''')
     conn.commit()
@@ -70,10 +73,8 @@ init_db()
 # -------------------------------------------------------------------
 st.set_page_config(page_title="중학생 독서 포트폴리오", page_icon="📚", layout="wide")
 
-# 태블릿 환경을 위한 터치 친화적 CSS
 st.markdown("""
     <style>
-    /* 입력창 및 버튼 크기 확대 (태블릿 터치 용이) */
     .stTextInput input, .stTextArea textarea, .stSelectbox, .stButton button {
         font-size: 18px !important;
         padding: 12px !important;
@@ -85,7 +86,6 @@ st.markdown("""
         color: white !important;
         font-weight: bold !important;
     }
-    /* 카드형 컨테이너 스타일 */
     .card {
         background-color: #f8f9fa;
         padding: 20px;
@@ -97,49 +97,51 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
-# 3. 사용자 구분 및 접속
+# 3. 사용자 구분
 # -------------------------------------------------------------------
 st.sidebar.header("🔐 접속 모드")
 user_type = st.sidebar.radio("모드를 선택하세요", ["👨‍🎓 학생용 (독서 기록)", "👩‍🏫 교사용 (관리 및 자동채점)"])
 
 # -------------------------------------------------------------------
-# 4. 학생용 화면 (태블릿 UI + 특정 날짜만 작성 가능 로직)
+# 4. 학생용 화면 (학반별 날짜 제어 반영)
 # -------------------------------------------------------------------
 if user_type == "👨‍🎓 학생용 (독서 기록)":
     st.title("📚 나의 독서 포트폴리오 (학생용)")
     
-    # 1단계: 간단 학생 로그인
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
-        student_id = st.text_input("학번 (예: 10301)", key="s_id")
+        class_name = st.selectbox("학반 선택", ["1반", "2반", "3반", "4반", "5반", "6반", "7반", "8반"], key="s_class")
     with c2:
-        student_name = st.text_input("이름", key="s_name")
+        student_id = st.text_input("학번 (예: 10301)", key="s_id")
     with c3:
+        student_name = st.text_input("이름", key="s_name")
+    with c4:
         pin = st.text_input("고유번호 4자리", type="password", key="s_pin")
     st.markdown("</div>", unsafe_allow_html=True)
 
     if student_id and student_name and pin:
         today_str = date.today().strftime("%Y-%m-%d")
         
-        # 오늘 날짜가 교사가 허용한 수업 날짜인지 DB 확인
+        # 학반별 오늘 날짜 작성 허용 여부 조회
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("SELECT allowed_date FROM allowed_dates WHERE allowed_date = ?", (today_str,))
-        is_allowed = c.fetchone()
+        c.execute("SELECT session_num FROM allowed_class_dates WHERE class_name = ? AND allowed_date = ?", (class_name, today_str))
+        date_record = c.fetchone()
         conn.close()
 
         tab1, tab2 = st.tabs(["📝 오늘의 독서 기록 쓰기", "📖 내 기록 모아보기"])
 
         with tab1:
-            if not is_allowed:
-                st.error(f"⛔ 오늘은 독서 기록 작성 날짜가 아닙니다. (오늘 날짜: {today_str})")
-                st.info("💡 선생님이 수업 시간에 독서 기록 작성을 열어주신 날에만 입력이 가능합니다.")
+            if not date_record:
+                st.error(f"⛔ [{class_name}]은(는) 오늘({today_str}) 독서 기록 작성 허용 날짜가 아닙니다.")
+                st.info(f"💡 선생님이 [{class_name}]의 독서 수업 날짜로 지정한 날에만 입력할 수 있습니다.")
             else:
-                st.success(f"✅ 오늘은 독서 기록 작성일입니다! 차분하게 작성을 진행해 주세요.")
+                session_name = date_record[0]
+                st.success(f"✅ [{class_name}] {session_name} 독서 기록 작성일입니다! 차분하게 작성을 진행해 주세요.")
                 
                 with st.form("tablet_reading_form"):
-                    st.markdown("### 📖 기본 정보")
+                    st.markdown(f"### 📖 기본 정보 ({class_name} / {session_name})")
                     col_b1, col_b2 = st.columns(2)
                     with col_b1:
                         book_title = st.text_input("책 제목 *")
@@ -164,9 +166,9 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                             c = conn.cursor()
                             c.execute('''
                                 INSERT INTO reading_logs 
-                                (student_id, student_name, pin, book_title, author, log_date, pages_read, summary, quote, qa_pair, reflection)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ''', (student_id, student_name, pin, book_title, author, today_str, pages_read, summary, quote, qa_pair, reflection))
+                                (class_name, student_id, student_name, pin, book_title, author, log_date, pages_read, summary, quote, qa_pair, reflection)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ''', (class_name, student_id, student_name, pin, book_title, author, today_str, pages_read, summary, quote, qa_pair, reflection))
                             conn.commit()
                             conn.close()
                             st.balloons()
@@ -189,7 +191,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         st.write(f"**느낀점:** {row['reflection']}")
 
 # -------------------------------------------------------------------
-# 5. 교사용 화면 (날짜 제한 설정 + AI 자동 채점)
+# 5. 교사용 화면 (학반별 차시 날짜 관리 추가)
 # -------------------------------------------------------------------
 else:
     st.title("👩‍🏫 교사 관리 및 AI 자동 채점 시스템")
@@ -200,31 +202,44 @@ else:
     else:
         st.success("교사 인증이 완료되었습니다.")
         
-        t_tab1, t_tab2, t_tab3 = st.tabs(["📅 작성 가능 날짜 관리", "🤖 AI 자동 채점 & 검토", "📥 성적 집계 다운로드"])
+        t_tab1, t_tab2, t_tab3 = st.tabs(["📅 학반/차시별 날짜 설정", "🤖 AI 자동 채점 & 검토", "📥 성적 집계 다운로드"])
         
-        # Tab 1: 제출 허용 날짜 지정
+        # Tab 1: 학반 및 차시별 허용 날짜 설정
         with t_tab1:
-            st.markdown("### 📅 독서 기록 작성 가능 날짜 설정")
-            st.caption("선택한 날짜에만 학생들이 독서 포트폴리오를 제출할 수 있습니다.")
+            st.markdown("### 📅 학반별/차시별 독서 작성 허용 날짜 지정")
+            st.caption("각 학반마다 독서 수업이 있는 날짜와 차시를 지정할 수 있습니다.")
             
-            col_d1, col_d2 = st.columns(2)
+            col_d1, col_d2 = st.columns([1, 1])
             with col_d1:
-                new_date = st.date_input("수업/작성 허용 날짜 추가", date.today()).strftime("%Y-%m-%d")
-                if st.button("날짜 허용 목록에 추가"):
-                    conn = sqlite3.connect(DB_FILE)
-                    c = conn.cursor()
-                    c.execute("INSERT OR IGNORE INTO allowed_dates VALUES (?)", (new_date,))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"[{new_date}]가 작성 허용 날짜로 등록되었습니다.")
-            
+                with st.form("add_class_date_form"):
+                    target_class = st.selectbox("학반 선택", ["1반", "2반", "3반", "4반", "5반", "6반", "7반", "8반"])
+                    session_num = st.selectbox("차시 선택", [f"{i}차시" for i in range(1, 18)])
+                    target_date = st.date_input("작성 허용 날짜 지정", date.today()).strftime("%Y-%m-%d")
+                    
+                    submit_date = st.form_submit_button("➕ 학반별 날짜 허용 등록")
+                    if submit_date:
+                        conn = sqlite3.connect(DB_FILE)
+                        c = conn.cursor()
+                        c.execute('''
+                            INSERT INTO allowed_class_dates (class_name, allowed_date, session_num)
+                            VALUES (?, ?, ?)
+                            ON CONFLICT(class_name, allowed_date) DO UPDATE SET session_num=excluded.session_num
+                        ''', (target_class, target_date, session_num))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"[{target_class}] {session_num} - {target_date} 설정 완료!")
+
             with col_d2:
+                st.markdown("#### Currently Allowed Dates per Class")
                 conn = sqlite3.connect(DB_FILE)
-                allowed_df = pd.read_sql_query("SELECT allowed_date AS '허용된 날짜 목록' FROM allowed_dates ORDER BY allowed_date DESC", conn)
+                allowed_df = pd.read_sql_query("""
+                    SELECT class_name AS 학반, session_num AS 차시, allowed_date AS 작성허용날짜 
+                    FROM allowed_class_dates ORDER BY class_name ASC, allowed_date DESC
+                """, conn)
                 conn.close()
                 st.dataframe(allowed_df, use_container_width=True)
 
-        # Tab 2: LLM 기반 자동 채점
+        # Tab 2: AI 자동 채점 (동일)
         with t_tab2:
             st.markdown("### 🤖 GPT AI 기반 루브릭 자동 채점")
             api_key = st.text_input("OpenAI API Key 입력 (자동채점용)", type="password")
@@ -237,7 +252,7 @@ else:
                 st.info("제출된 독서 기록이 없습니다.")
             else:
                 students = df_all['student_id'].unique()
-                sel_student = st.selectbox("학생 선택", students, format_func=lambda x: f"{x} - {df_all[df_all['student_id']==x]['student_name'].iloc[0]}")
+                sel_student = st.selectbox("학생 선택", students, format_func=lambda x: f"[{df_all[df_all['student_id']==x]['class_name'].iloc[0]}] {x} - {df_all[df_all['student_id']==x]['student_name'].iloc[0]}")
                 
                 s_logs = df_all[df_all['student_id'] == sel_student]
                 s_name = s_logs['student_name'].iloc[0]
@@ -245,7 +260,6 @@ else:
                 
                 target_logs = s_logs[s_logs['book_title'] == sel_book]
                 
-                # 전체 누적 내용 텍스트로 합성
                 combined_text = ""
                 for _, r in target_logs.iterrows():
                     combined_text += f"\n[날짜: {r['log_date']}]\n- 요약: {r['summary']}\n- 문장: {r['quote']}\n- 질문답변: {r['qa_pair']}\n- 느낌: {r['reflection']}\n"
@@ -276,7 +290,6 @@ else:
                                 {combined_text}
 
                                 [응답 형식]
-                                반드시 아래 형식을 정확히 지켜 답하세요:
                                 요약점수: [점수]
                                 감상점수: [점수]
                                 질문점수: [점수]
