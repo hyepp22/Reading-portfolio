@@ -7,18 +7,17 @@ import openai
 DB_FILE = "reading_portfolio.db"
 
 # -------------------------------------------------------------------
-# 1. DB 초기화 (기존 DB 구조 완전 마이그레이션)
+# 1. DB 초기화 (스키마 자동 교정 및 마이그레이션 포함)
 # -------------------------------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    # 1) 학생 명단 테이블 구조 검사 (grade, class_name, student_id 복합 PK 미적용 시 재생성)
+    # 1) 학생 명단 테이블 구조 검사 및 생성
     c.execute("PRAGMA table_info(student_list)")
     s_cols_info = c.fetchall()
     if len(s_cols_info) > 0:
         s_pk_count = sum([1 for col in s_cols_info if col[5] > 0])
-        # PK가 3개가 아닌 구버전 구조면 삭제 후 재 create (번호 중복 에러 방지)
         if s_pk_count < 3:
             c.execute("DROP TABLE student_list")
 
@@ -33,7 +32,7 @@ def init_db():
         )
     ''')
 
-    # 2) 독서 기록 테이블
+    # 2) 독서 기록 테이블 생성 및 컬럼 마이그레이션
     c.execute('''
         CREATE TABLE IF NOT EXISTS reading_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,6 +51,13 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    c.execute("PRAGMA table_info(reading_logs)")
+    r_cols = [col[1] for col in c.fetchall()]
+    if 'class_name' not in r_cols:
+        c.execute("ALTER TABLE reading_logs ADD COLUMN class_name TEXT")
+    if 'grade' not in r_cols:
+        c.execute("ALTER TABLE reading_logs ADD COLUMN grade TEXT")
 
     # 3) 평가 테이블
     c.execute('''
@@ -79,7 +85,7 @@ def init_db():
         )
     ''')
 
-    # 4) allowed_class_dates 테이블 PK 구조 검사 및 재생성
+    # 4) 작성 허용 날짜 테이블
     c.execute("PRAGMA table_info(allowed_class_dates)")
     cols_info = c.fetchall()
     if len(cols_info) > 0:
@@ -104,13 +110,12 @@ def init_db():
 init_db()
 
 # -------------------------------------------------------------------
-# 2. UI & 태블릿 최적화 CSS (정렬 보정 추가)
+# 2. UI & 태블릿 최적화 CSS (입력창 정렬 보정)
 # -------------------------------------------------------------------
 st.set_page_config(page_title="중학생 독서 포트폴리오", page_icon="📚", layout="wide")
 
 st.markdown("""
     <style>
-    /* 입력 위젯 간 높이 및 정렬 통일 */
     div[data-baseweb="select"], div[data-baseweb="input"] {
         margin-top: 0px !important;
     }
@@ -140,15 +145,18 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ... (이전 코드 동일) ...
+# -------------------------------------------------------------------
+# 3. 사용자 구분 (변수 선언 위치 고정)
+# -------------------------------------------------------------------
+st.sidebar.header("🔐 접속 모드")
+user_type = st.sidebar.radio("모드를 선택하세요", ["👨‍🎓 학생용 (독서 기록)", "👩‍🏫 교사용 (관리 및 자동채점)"])
 
 # -------------------------------------------------------------------
-# 4. 학생용 화면 (입장 버튼 폼 적용)
+# 4. 학생용 화면
 # -------------------------------------------------------------------
 if user_type == "👨‍🎓 학생용 (독서 기록)":
     st.title("📚 나의 독서 포트폴리오 (학생용)")
     
-    # [수정] st.form을 활용하여 '입장' 버튼 생성 및 수평 정렬 맞춤
     with st.form("student_login_form"):
         st.markdown("##### 🔑 학생 로그인")
         c1, c2, c3, c4 = st.columns(4)
@@ -163,7 +171,6 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
         
         login_btn = st.form_submit_button("🚀 학생 포트폴리오 입장하기", use_container_width=True)
 
-    # 입장 버튼을 눌렀을 때 검증 수행
     if login_btn:
         if not student_id or not pin:
             st.warning("⚠️ 번호와 PIN 번호를 모두 입력해 주세요.")
@@ -185,7 +192,6 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                     'student_name': user_match[0]
                 }
 
-    # 로그인 성공 상태 유지 시 포트폴리오 화면 표시
     if 'logged_in_student' in st.session_state:
         std_info = st.session_state['logged_in_student']
         s_grade = std_info['grade']
@@ -243,7 +249,6 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         if not book_title or not pages_read or not summary or not reflection:
                             st.error("필수 항목(책 제목, 페이지, 요약, 느낀점)을 빠짐없이 입력해 주세요!")
                         else:
-                            # 질문과 답변을 하나의 문맥으로 병합하여 저장
                             combined_qa = f"Q: {question_text.strip()}\nA: {answer_text.strip()}" if (question_text or answer_text) else ""
 
                             conn = sqlite3.connect(DB_FILE)
@@ -257,6 +262,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                             conn.close()
                             st.balloons()
                             st.success("오늘의 독서 기록이 정상 제출되었습니다!")
+
         with tab2:
             st.markdown("#### 내 누적 포트폴리오")
             conn = sqlite3.connect(DB_FILE)
@@ -270,7 +276,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                     with st.expander(f"📌 [{row['log_date']}] {row['book_title']} ({row['pages_read']})"):
                         st.write(f"**요약:** {row['summary']}")
                         st.write(f"**인상 깊은 문장:** {row['quote']}")
-                        st.write(f"**질문/답변:** {row['qa_pair']}")
+                        st.write(f"**질문 및 답변:**\n{row['qa_pair']}")
                         st.write(f"**느낀점:** {row['reflection']}")
 
 # -------------------------------------------------------------------
@@ -408,7 +414,7 @@ else:
                 
                 combined_text = ""
                 for _, r in target_logs.iterrows():
-                    combined_text += f"\n[날짜: {r['log_date']}]\n- 요약: {r['summary']}\n- 문장: {r['quote']}\n- 질문답변: {r['qa_pair']}\n- 느낌: {r['reflection']}\n"
+                    combined_text += f"\n[날짜: {r['log_date']}]\n- 요약: {r['summary']}\n- 문장: {r['quote']}\n- 질문/답변: {r['qa_pair']}\n- 느낌: {r['reflection']}\n"
                 
                 col_ui1, col_ui2 = st.columns(2)
                 with col_ui1:
