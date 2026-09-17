@@ -145,9 +145,9 @@ else:
     st.subheader("👩‍🏫 교사 관리 및 수행평가 채점 모드")
     teacher_pw = st.sidebar.text_input("교사 비밀번호 입력", type="password")
     
-    # 교사 기본 비밀번호 설정 (원하는 비밀번호로 변경 가능)
-    if teacher_pw != "teacher1234":
-        st.warning("교사 전용 비밀번호(기본: teacher1234)를 입력해야 접근할 수 있습니다.")
+    # 교사 비밀번호 검증 (비밀번호: 0923)
+    if teacher_pw != "0923":
+        st.warning("교사전용 비밀번호를 입력해야 접근할 수 있습니다.")
     else:
         st.success("교사 인증이 완료되었습니다.")
         
@@ -156,6 +156,8 @@ else:
         conn.close()
         
         t_tab1, t_tab2, t_tab3 = st.tabs(["📊 학생별 진도 현황", "🔍 포트폴리오 개별 검토 및 채점", "📥 수행평가 결과 집계"])
+        
+        # (이하 기존 교사용 화면 동일...)
         
         # Tab 1: 진도 현황
         with t_tab1:
