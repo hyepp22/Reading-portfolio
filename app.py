@@ -7,22 +7,32 @@ import openai
 DB_FILE = "reading_portfolio.db"
 
 # -------------------------------------------------------------------
-# 1. DB 초기화 (기존 DB 구버전 자동 마이그레이션 및 PK 구조 재설정)
+# 1. DB 초기화 (기존 DB 구조 완전 마이그레이션)
 # -------------------------------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    # 1) 학생 명단 테이블
+    # 1) 학생 명단 테이블 구조 검사 (grade, class_name, student_id 복합 PK 미적용 시 재생성)
+    c.execute("PRAGMA table_info(student_list)")
+    s_cols_info = c.fetchall()
+    if len(s_cols_info) > 0:
+        s_pk_count = sum([1 for col in s_cols_info if col[5] > 0])
+        # PK가 3개가 아닌 구버전 구조면 삭제 후 재 create (번호 중복 에러 방지)
+        if s_pk_count < 3:
+            c.execute("DROP TABLE student_list")
+
     c.execute('''
         CREATE TABLE IF NOT EXISTS student_list (
             grade TEXT,
             class_name TEXT,
-            student_id TEXT PRIMARY KEY,
+            student_id TEXT,
             student_name TEXT,
-            pin TEXT
+            pin TEXT,
+            PRIMARY KEY (grade, class_name, student_id)
         )
     ''')
+
     # 2) 독서 기록 테이블
     c.execute('''
         CREATE TABLE IF NOT EXISTS reading_logs (
@@ -42,6 +52,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
     # 3) 평가 테이블
     c.execute('''
         CREATE TABLE IF NOT EXISTS evaluations (
@@ -68,17 +79,15 @@ def init_db():
         )
     ''')
 
-    # [수정] allowed_class_dates 테이블의 PK 구조 검사 (grade 포함 여부 및 PK 3개 조건 검사)
+    # 4) allowed_class_dates 테이블 PK 구조 검사 및 재생성
     c.execute("PRAGMA table_info(allowed_class_dates)")
     cols_info = c.fetchall()
     if len(cols_info) > 0:
         cols = [col[1] for col in cols_info]
-        pk_count = sum([1 for col in cols_info if col[5] > 0]) # pk 설정된 컬럼 개수
-        # grade 컬럼이 없거나 PK가 3개가 아닌 구버전 구조면 삭제
+        pk_count = sum([1 for col in cols_info if col[5] > 0])
         if 'grade' not in cols or pk_count < 3:
             c.execute("DROP TABLE allowed_class_dates")
 
-    # 4) 학년/학반별 작성 허용 날짜 테이블 생성 (정확한 composite PK 지정)
     c.execute('''
         CREATE TABLE IF NOT EXISTS allowed_class_dates (
             grade TEXT,
@@ -88,17 +97,6 @@ def init_db():
             PRIMARY KEY (grade, class_name, allowed_date)
         )
     ''')
-
-    # [마이그레이션] 나머지 테이블들에 grade 컬럼 누락 시 자동 추가
-    tables_to_check = ['student_list', 'reading_logs', 'evaluations']
-    for table in tables_to_check:
-        c.execute(f"PRAGMA table_info({table})")
-        columns = [column[1] for column in c.fetchall()]
-        if 'grade' not in columns and len(columns) > 0:
-            try:
-                c.execute(f"ALTER TABLE {table} ADD COLUMN grade TEXT DEFAULT '1학년'")
-            except Exception:
-                pass
 
     conn.commit()
     conn.close()
@@ -227,7 +225,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
             with tab2:
                 st.markdown("#### 내 누적 포트폴리오")
                 conn = sqlite3.connect(DB_FILE)
-                df_my = pd.read_sql_query("SELECT * FROM reading_logs WHERE student_id = ? ORDER BY id DESC", conn, params=(student_id,))
+                df_my = pd.read_sql_query("SELECT * FROM reading_logs WHERE grade = ? AND class_name = ? AND student_id = ? ORDER BY id DESC", conn, params=(grade, class_name, student_id))
                 conn.close()
                 
                 if df_my.empty:
@@ -277,8 +275,8 @@ else:
                             c.execute('''
                                 INSERT INTO student_list (grade, class_name, student_id, student_name, pin)
                                 VALUES (?, ?, ?, ?, ?)
-                                ON CONFLICT(student_id) DO UPDATE SET 
-                                grade=excluded.grade, class_name=excluded.class_name, student_name=excluded.student_name, pin=excluded.pin
+                                ON CONFLICT(grade, class_name, student_id) DO UPDATE SET 
+                                student_name=excluded.student_name, pin=excluded.pin
                             ''', (str(r['grade']), str(r['class_name']), str(r['student_id']), str(r['student_name']), str(r['pin'])))
                         conn.commit()
                         conn.close()
@@ -302,8 +300,8 @@ else:
                             c.execute('''
                                 INSERT INTO student_list (grade, class_name, student_id, student_name, pin)
                                 VALUES (?, ?, ?, ?, ?)
-                                ON CONFLICT(student_id) DO UPDATE SET 
-                                grade=excluded.grade, class_name=excluded.class_name, student_name=excluded.student_name, pin=excluded.pin
+                                ON CONFLICT(grade, class_name, student_id) DO UPDATE SET 
+                                student_name=excluded.student_name, pin=excluded.pin
                             ''', (s_grade, s_class, s_id, s_name, s_pin))
                             conn.commit()
                             conn.close()
@@ -312,7 +310,7 @@ else:
             with c_m2:
                 st.markdown("#### 📋 현재 등록된 학생 명단")
                 conn = sqlite3.connect(DB_FILE)
-                df_std = pd.read_sql_query("SELECT grade AS 학년, class_name AS 학반, student_id AS 번호, student_name AS 이름, pin AS 비밀번호 FROM student_list ORDER BY CAST(student_id AS INTEGER) ASC", conn)
+                df_std = pd.read_sql_query("SELECT grade AS 학년, class_name AS 학반, student_id AS 번호, student_name AS 이름, pin AS 비밀번호 FROM student_list ORDER BY grade ASC, class_name ASC, CAST(student_id AS INTEGER) ASC", conn)
                 conn.close()
                 st.dataframe(df_std, use_container_width=True)
 
@@ -355,17 +353,20 @@ else:
             api_key = st.text_input("OpenAI API Key 입력", type="password")
             
             conn = sqlite3.connect(DB_FILE)
-            df_all = pd.read_sql_query("SELECT * FROM reading_logs ORDER BY CAST(student_id AS INTEGER) ASC", conn)
+            df_all = pd.read_sql_query("SELECT * FROM reading_logs ORDER BY grade ASC, class_name ASC, CAST(student_id AS INTEGER) ASC", conn)
             conn.close()
             
             if df_all.empty:
                 st.info("제출된 독서 기록이 없습니다.")
             else:
-                students = df_all['student_id'].unique()
-                sel_student = st.selectbox("학생 선택", students, format_func=lambda x: f"[{df_all[df_all['student_id']==x]['grade'].iloc[0]} {df_all[df_all['student_id']==x]['class_name'].iloc[0]}] {x}번 - {df_all[df_all['student_id']==x]['student_name'].iloc[0]}")
+                df_all['user_label'] = df_all.apply(lambda r: f"[{r['grade']} {r['class_name']}] {r['student_id']}번 - {r['student_name']}", axis=1)
+                unique_students = df_all[['grade', 'class_name', 'student_id', 'user_label']].drop_duplicates()
                 
-                s_logs = df_all[df_all['student_id'] == sel_student]
-                s_name = s_logs['student_name'].iloc[0]
+                sel_label = st.selectbox("학생 선택", unique_students['user_label'].tolist())
+                sel_info = unique_students[unique_students['user_label'] == sel_label].iloc[0]
+                
+                s_logs = df_all[(df_all['grade'] == sel_info['grade']) & (df_all['class_name'] == sel_info['class_name']) & (df_all['student_id'] == sel_info['student_id'])]
+                s_name = sel_info['user_label']
                 sel_book = st.selectbox("책 선택", s_logs['book_title'].unique())
                 
                 target_logs = s_logs[s_logs['book_title'] == sel_book]
@@ -376,7 +377,7 @@ else:
                 
                 col_ui1, col_ui2 = st.columns(2)
                 with col_ui1:
-                    st.markdown(f"#### 📖 {s_name} 학생 누적 기록 (총 {len(target_logs)}회)")
+                    st.markdown(f"#### 📖 {s_name} 누적 기록 (총 {len(target_logs)}회)")
                     st.text_area("전체 작성 내용", combined_text, height=400)
                 
                 with col_ui2:
