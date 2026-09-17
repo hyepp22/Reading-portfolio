@@ -7,11 +7,12 @@ import openai
 DB_FILE = "reading_portfolio.db"
 
 # -------------------------------------------------------------------
-# 1. DB 초기화 (grade 학년 컬럼 추가)
+# 1. DB 초기화 (기존 DB 구조 구버전 자동 업데이트 포함)
 # -------------------------------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    
     # 1) 학생 명단 테이블
     c.execute('''
         CREATE TABLE IF NOT EXISTS student_list (
@@ -76,6 +77,18 @@ def init_db():
             PRIMARY KEY (grade, class_name, allowed_date)
         )
     ''')
+
+    # [마이그레이션] 기존 DB에 grade 컬럼이 없는 경우 누락된 컬럼 자동 추가
+    tables_to_check = ['student_list', 'reading_logs', 'evaluations', 'allowed_class_dates']
+    for table in tables_to_check:
+        c.execute(f"PRAGMA table_info({table})")
+        columns = [column[1] for column in c.fetchall()]
+        if 'grade' not in columns and len(columns) > 0:
+            try:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN grade TEXT DEFAULT '1학년'")
+            except Exception:
+                pass
+
     conn.commit()
     conn.close()
 
@@ -116,7 +129,7 @@ st.sidebar.header("🔐 접속 모드")
 user_type = st.sidebar.radio("모드를 선택하세요", ["👨‍🎓 학생용 (독서 기록)", "👩‍🏫 교사용 (관리 및 자동채점)"])
 
 # -------------------------------------------------------------------
-# 4. 학생용 화면 (학년 선택 반영)
+# 4. 학생용 화면
 # -------------------------------------------------------------------
 if user_type == "👨‍🎓 학생용 (독서 기록)":
     st.title("📚 나의 독서 포트폴리오 (학생용)")
@@ -134,7 +147,6 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
     st.markdown("</div>", unsafe_allow_html=True)
 
     if student_id and pin:
-        # 학생 인증 절차 (학년 + 학반 + 학번 + PIN 검증)
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("SELECT student_name FROM student_list WHERE grade = ? AND class_name = ? AND student_id = ? AND pin = ?", 
@@ -150,7 +162,6 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
 
             today_str = date.today().strftime("%Y-%m-%d")
             
-            # 학년/학반별 허용 날짜 체크
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
             c.execute("SELECT session_num FROM allowed_class_dates WHERE grade = ? AND class_name = ? AND allowed_date = ?", 
@@ -219,7 +230,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                             st.write(f"**느낀점:** {row['reflection']}")
 
 # -------------------------------------------------------------------
-# 5. 교사용 화면 (학년 항목 관리 및 채점)
+# 5. 교사용 화면
 # -------------------------------------------------------------------
 else:
     st.title("👩‍🏫 교사 관리 및 AI 자동 채점 시스템")
@@ -232,7 +243,7 @@ else:
         
         t_tab1, t_tab2, t_tab3, t_tab4 = st.tabs(["👨‍🎓 학생 명단 등록", "📅 학년/반/차시별 날짜 설정", "🤖 AI 자동 채점 & 검토", "📥 성적 집계 다운로드"])
         
-        # Tab 1: 학년 포함 학생 명단 등록
+        # Tab 1: 학생 명단 등록
         with t_tab1:
             st.markdown("### 👨‍🎓 학생 명단 사전 등록")
             st.caption("학생들이 접속 시 인증할 [학년, 학반, 학번, 이름, PIN 4자리] 명단을 등록합니다.")
@@ -294,7 +305,7 @@ else:
                 conn.close()
                 st.dataframe(df_std, use_container_width=True)
 
-        # Tab 2: 학년 및 반별 작성 허용 날짜 지정
+        # Tab 2: 학년/학반별 허용 날짜 설정
         with t_tab2:
             st.markdown("### 📅 학년/학반별 차시 독서 작성 허용 날짜 지정")
             col_d1, col_d2 = st.columns([1, 1])
@@ -394,7 +405,7 @@ else:
                                 st.success("AI 채점 완료!")
                                 st.text(res_text)
 
-        # Tab 4: 결과 집계
+        # Tab 4: 성적 집계 다운로드
         with t_tab4:
             st.markdown("#### 전체 성적표 내보내기")
             conn = sqlite3.connect(DB_FILE)
