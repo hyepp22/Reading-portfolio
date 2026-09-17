@@ -104,139 +104,174 @@ def init_db():
 init_db()
 
 # -------------------------------------------------------------------
-# 2. UI & 태블릿 최적화 CSS 적용
+# 2. UI & 태블릿 최적화 CSS (정렬 보정 추가)
 # -------------------------------------------------------------------
 st.set_page_config(page_title="중학생 독서 포트폴리오", page_icon="📚", layout="wide")
 
 st.markdown("""
     <style>
-    .stTextInput input, .stTextArea textarea, .stSelectbox, .stButton button {
+    /* 입력 위젯 간 높이 및 정렬 통일 */
+    div[data-baseweb="select"], div[data-baseweb="input"] {
+        margin-top: 0px !important;
+    }
+    .stSelectbox label, .stTextInput label {
+        font-size: 15px !important;
+        font-weight: 600 !important;
+        min-height: 25px !important;
+        display: flex;
+        align-items: flex-end;
+    }
+    .stTextInput input, .stTextArea textarea, .stSelectbox select {
         font-size: 18px !important;
-        padding: 12px !important;
         border-radius: 10px !important;
     }
     .stButton button {
-        height: 55px !important;
-        background-color: #4CAF50 !important;
-        color: white !important;
+        font-size: 18px !important;
         font-weight: bold !important;
+        border-radius: 10px !important;
     }
     .card {
         background-color: #f8f9fa;
         padding: 20px;
         border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         margin-bottom: 20px;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# -------------------------------------------------------------------
-# 3. 사용자 구분
-# -------------------------------------------------------------------
-st.sidebar.header("🔐 접속 모드")
-user_type = st.sidebar.radio("모드를 선택하세요", ["👨‍🎓 학생용 (독서 기록)", "👩‍🏫 교사용 (관리 및 자동채점)"])
+# ... (이전 코드 동일) ...
 
 # -------------------------------------------------------------------
-# 4. 학생용 화면
+# 4. 학생용 화면 (입장 버튼 폼 적용)
 # -------------------------------------------------------------------
 if user_type == "👨‍🎓 학생용 (독서 기록)":
     st.title("📚 나의 독서 포트폴리오 (학생용)")
     
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        grade = st.selectbox("학년 선택", ["1학년", "2학년", "3학년"], key="s_grade")
-    with c2:
-        class_name = st.selectbox("학반 선택", ["1반", "2반", "3반", "4반", "5반", "6반", "7반", "8반"], key="s_class")
-    with c3:
-        student_id = st.text_input("번호 (예: 15)", key="s_id")
-    with c4:
-        pin = st.text_input("지정 PIN 번호 4자리", type="password", key="s_pin")
-    st.markdown("</div>", unsafe_allow_html=True)
+    # [수정] st.form을 활용하여 '입장' 버튼 생성 및 수평 정렬 맞춤
+    with st.form("student_login_form"):
+        st.markdown("##### 🔑 학생 로그인")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            grade = st.selectbox("학년 선택", ["1학년", "2학년", "3학년"], key="s_grade")
+        with c2:
+            class_name = st.selectbox("학반 선택", ["1반", "2반", "3반", "4반", "5반", "6반", "7반", "8반"], key="s_class")
+        with c3:
+            student_id = st.text_input("번호 (예: 15)", key="s_id")
+        with c4:
+            pin = st.text_input("지정 PIN 번호 4자리", type="password", key="s_pin")
+        
+        login_btn = st.form_submit_button("🚀 학생 포트폴리오 입장하기", use_container_width=True)
 
-    if student_id and pin:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("SELECT student_name FROM student_list WHERE grade = ? AND class_name = ? AND student_id = ? AND pin = ?", 
-                  (grade, class_name, student_id, pin))
-        user_match = c.fetchone()
-        conn.close()
-
-        if not user_match:
-            st.error("❌ 학년, 학반, 번호 또는 비밀번호가 일치하지 않습니다. 선생님께 문의하세요.")
+    # 입장 버튼을 눌렀을 때 검증 수행
+    if login_btn:
+        if not student_id or not pin:
+            st.warning("⚠️ 번호와 PIN 번호를 모두 입력해 주세요.")
         else:
-            student_name = user_match[0]
-            st.success(f"👋 **[{grade} {class_name} {student_id}번] {student_name}** 학생 환영합니다!")
-
-            today_str = date.today().strftime("%Y-%m-%d")
-            
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
-            c.execute("SELECT session_num FROM allowed_class_dates WHERE grade = ? AND class_name = ? AND allowed_date = ?", 
-                      (grade, class_name, today_str))
-            date_record = c.fetchone()
+            c.execute("SELECT student_name FROM student_list WHERE grade = ? AND class_name = ? AND student_id = ? AND pin = ?", 
+                      (grade, class_name, student_id, pin))
+            user_match = c.fetchone()
             conn.close()
 
-            tab1, tab2 = st.tabs(["📝 오늘의 독서 기록 쓰기", "📖 내 기록 모아보기"])
+            if not user_match:
+                st.error("❌ 학년, 학반, 번호 또는 비밀번호가 일치하지 않습니다. 선생님께 문의하세요.")
+            else:
+                st.session_state['logged_in_student'] = {
+                    'grade': grade,
+                    'class_name': class_name,
+                    'student_id': student_id,
+                    'student_name': user_match[0]
+                }
 
-            with tab1:
-                if not date_record:
-                    st.error(f"⛔ [{grade} {class_name}]은(는) 오늘({today_str}) 독서 기록 작성 허용 날짜가 아닙니다.")
-                    st.info(f"💡 선생님이 [{grade} {class_name}]의 독서 수업 날짜로 지정한 날에만 작성할 수 있습니다.")
-                else:
-                    session_name = date_record[0]
-                    st.info(f"📌 **현재 진행 차시:** {grade} {class_name} - {session_name}")
-                    
-                    with st.form("tablet_reading_form"):
-                        st.markdown("### 📖 기본 정보")
-                        col_b1, col_b2 = st.columns(2)
-                        with col_b1:
-                            book_title = st.text_input("책 제목 *")
-                            author = st.text_input("작가 이름 *")
-                        with col_b2:
-                            pages_read = st.text_input("오늘 읽은 페이지 (예: 12~35p) *")
-                        
-                        st.markdown("---")
-                        st.markdown("### ✏️ 독서 활동 내용")
-                        summary = st.text_area("1. 오늘 읽은 내용 짧은 요약 (핵심 줄거리)", height=120)
-                        quote = st.text_area("2. 가장 인상 깊은 문장과 이유", height=100)
-                        qa_pair = st.text_area("3. 읽은 내용에 대한 질문과 나의 답변", height=120)
-                        reflection = st.text_area("4. 나의 생각과 느낌 (느낀점/깨달은점)", height=140)
+    # 로그인 성공 상태 유지 시 포트폴리오 화면 표시
+    if 'logged_in_student' in st.session_state:
+        std_info = st.session_state['logged_in_student']
+        s_grade = std_info['grade']
+        s_class = std_info['class_name']
+        s_id = std_info['student_id']
+        s_name = std_info['student_name']
 
-                        submit_btn = st.form_submit_button("🚀 독서 기록 제출하기 (터치)")
+        st.success(f"👋 **[{s_grade} {s_class} {s_id}번] {s_name}** 학생 환영합니다!")
 
-                        if submit_btn:
-                            if not book_title or not pages_read or not summary or not reflection:
-                                st.error("필수 내용들을 빠짐없이 입력해 주세요!")
-                            else:
-                                conn = sqlite3.connect(DB_FILE)
-                                c = conn.cursor()
-                                c.execute('''
-                                    INSERT INTO reading_logs 
-                                    (grade, class_name, student_id, student_name, book_title, author, log_date, pages_read, summary, quote, qa_pair, reflection)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                ''', (grade, class_name, student_id, student_name, book_title, author, today_str, pages_read, summary, quote, qa_pair, reflection))
-                                conn.commit()
-                                conn.close()
-                                st.balloons()
-                                st.success("오늘의 독서 기록이 정상 제출되었습니다!")
+        today_str = date.today().strftime("%Y-%m-%d")
+        
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT session_num FROM allowed_class_dates WHERE grade = ? AND class_name = ? AND allowed_date = ?", 
+                  (s_grade, s_class, today_str))
+        date_record = c.fetchone()
+        conn.close()
 
-            with tab2:
-                st.markdown("#### 내 누적 포트폴리오")
-                conn = sqlite3.connect(DB_FILE)
-                df_my = pd.read_sql_query("SELECT * FROM reading_logs WHERE grade = ? AND class_name = ? AND student_id = ? ORDER BY id DESC", conn, params=(grade, class_name, student_id))
-                conn.close()
+        tab1, tab2 = st.tabs(["📝 오늘의 독서 기록 쓰기", "📖 내 기록 모아보기"])
+
+        with tab1:
+            if not date_record:
+                st.error(f"⛔ [{s_grade} {s_class}]은(는) 오늘({today_str}) 독서 기록 작성 허용 날짜가 아닙니다.")
+                st.info(f"💡 선생님이 [{s_grade} {s_class}]의 독서 수업 날짜로 지정한 날에만 작성할 수 있습니다.")
+            else:
+                session_name = date_record[0]
+                st.info(f"📌 **현재 진행 차시:** {s_grade} {s_class} - {session_name}")
                 
-                if df_my.empty:
-                    st.info("아직 제출된 기록이 없습니다.")
-                else:
-                    for idx, row in df_my.iterrows():
-                        with st.expander(f"📌 [{row['log_date']}] {row['book_title']} ({row['pages_read']})"):
-                            st.write(f"**요약:** {row['summary']}")
-                            st.write(f"**인상 깊은 문장:** {row['quote']}")
-                            st.write(f"**질문/답변:** {row['qa_pair']}")
-                            st.write(f"**느낀점:** {row['reflection']}")
+                with st.form("tablet_reading_form"):
+                    st.markdown("### 📖 기본 정보")
+                    col_b1, col_b2 = st.columns(2)
+                    with col_b1:
+                        book_title = st.text_input("책 제목 *")
+                        author = st.text_input("작가 이름 *")
+                    with col_b2:
+                        pages_read = st.text_input("오늘 읽은 페이지 (예: 12~35p) *")
+                    
+                    st.markdown("---")
+                    st.markdown("### ✏️ 독서 활동 내용")
+                    summary = st.text_area("1. 오늘 읽은 내용 짧은 요약 (핵심 줄거리) *", height=120)
+                    quote = st.text_area("2. 가장 인상 깊은 문장과 이유", height=100)
+                    
+                    st.markdown("#### ❓ 3. 질문 및 답변 작성")
+                    col_q1, col_q2 = st.columns(2)
+                    with col_q1:
+                        question_text = st.text_area("3-1. 읽은 내용에 대한 나의 질문", height=110, placeholder="예: 주인공은 왜 그런 선택을 했을까?")
+                    with col_q2:
+                        answer_text = st.text_area("3-2. 질문에 대한 나의 생각/답변", height=110, placeholder="예: 자신의 목표를 이루기 위해 위험을 무릅쓴 것 같다.")
+                    
+                    reflection = st.text_area("4. 나의 생각과 느낌 (느낀점/깨달은점) *", height=140)
+
+                    submit_btn = st.form_submit_button("🚀 독서 기록 제출하기")
+
+                    if submit_btn:
+                        if not book_title or not pages_read or not summary or not reflection:
+                            st.error("필수 항목(책 제목, 페이지, 요약, 느낀점)을 빠짐없이 입력해 주세요!")
+                        else:
+                            # 질문과 답변을 하나의 문맥으로 병합하여 저장
+                            combined_qa = f"Q: {question_text.strip()}\nA: {answer_text.strip()}" if (question_text or answer_text) else ""
+
+                            conn = sqlite3.connect(DB_FILE)
+                            c = conn.cursor()
+                            c.execute('''
+                                INSERT INTO reading_logs 
+                                (grade, class_name, student_id, student_name, book_title, author, log_date, pages_read, summary, quote, qa_pair, reflection)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ''', (s_grade, s_class, s_id, s_name, book_title, author, today_str, pages_read, summary, quote, combined_qa, reflection))
+                            conn.commit()
+                            conn.close()
+                            st.balloons()
+                            st.success("오늘의 독서 기록이 정상 제출되었습니다!")
+        with tab2:
+            st.markdown("#### 내 누적 포트폴리오")
+            conn = sqlite3.connect(DB_FILE)
+            df_my = pd.read_sql_query("SELECT * FROM reading_logs WHERE grade = ? AND class_name = ? AND student_id = ? ORDER BY id DESC", conn, params=(s_grade, s_class, s_id))
+            conn.close()
+            
+            if df_my.empty:
+                st.info("아직 제출된 기록이 없습니다.")
+            else:
+                for idx, row in df_my.iterrows():
+                    with st.expander(f"📌 [{row['log_date']}] {row['book_title']} ({row['pages_read']})"):
+                        st.write(f"**요약:** {row['summary']}")
+                        st.write(f"**인상 깊은 문장:** {row['quote']}")
+                        st.write(f"**질문/답변:** {row['qa_pair']}")
+                        st.write(f"**느낀점:** {row['reflection']}")
 
 # -------------------------------------------------------------------
 # 5. 교사용 화면
