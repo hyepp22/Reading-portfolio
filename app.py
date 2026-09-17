@@ -141,7 +141,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
     with c2:
         class_name = st.selectbox("학반 선택", ["1반", "2반", "3반", "4반", "5반", "6반", "7반", "8반"], key="s_class")
     with c3:
-        student_id = st.text_input("학번 (예: 10301)", key="s_id")
+        student_id = st.text_input("번호 (예: 15)", key="s_id")
     with c4:
         pin = st.text_input("지정 PIN 번호 4자리", type="password", key="s_pin")
     st.markdown("</div>", unsafe_allow_html=True)
@@ -155,10 +155,10 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
         conn.close()
 
         if not user_match:
-            st.error("❌ 학년, 학반, 학번 또는 비밀번호가 일치하지 않습니다. 선생님께 문의하세요.")
+            st.error("❌ 학년, 학반, 번호 또는 비밀번호가 일치하지 않습니다. 선생님께 문의하세요.")
         else:
             student_name = user_match[0]
-            st.success(f"👋 **[{grade} {class_name}] {student_name}** 학생 환영합니다!")
+            st.success(f"👋 **[{grade} {class_name} {student_id}번] {student_name}** 학생 환영합니다!")
 
             today_str = date.today().strftime("%Y-%m-%d")
             
@@ -246,12 +246,12 @@ else:
         # Tab 1: 학생 명단 등록
         with t_tab1:
             st.markdown("### 👨‍🎓 학생 명단 사전 등록")
-            st.caption("학생들이 접속 시 인증할 [학년, 학반, 학번, 이름, PIN 4자리] 명단을 등록합니다.")
+            st.caption("학생들이 접속 시 인증할 [학년, 학반, 번호, 이름, PIN 4자리] 명단을 등록합니다.")
             
             c_m1, c_m2 = st.columns([1, 1])
             with c_m1:
                 st.markdown("#### 📄 엑셀 / CSV 파일로 일괄 업로드")
-                st.caption("양식 열 이름: `grade` (예: 1학년), `class_name` (예: 1반), `student_id` (예: 10301), `student_name`, `pin`")
+                st.caption("양식 열 이름: `grade` (예: 1학년), `class_name` (예: 1반), `student_id` (예: 15), `student_name`, `pin`")
                 uploaded_file = st.file_uploader("명단 파일(CSV/Excel) 선택", type=["csv", "xlsx"])
                 if uploaded_file is not None:
                     try:
@@ -280,7 +280,7 @@ else:
                 with st.form("single_student_form"):
                     s_grade = st.selectbox("학년", ["1학년", "2학년", "3학년"])
                     s_class = st.selectbox("학반", ["1반", "2반", "3반", "4반", "5반", "6반", "7반", "8반"])
-                    s_id = st.text_input("학번 (예: 10301)")
+                    s_id = st.text_input("번호 (예: 15)")
                     s_name = st.text_input("이름")
                     s_pin = st.text_input("초기 비밀번호 4자리")
                     
@@ -301,7 +301,7 @@ else:
             with c_m2:
                 st.markdown("#### 📋 현재 등록된 학생 명단")
                 conn = sqlite3.connect(DB_FILE)
-                df_std = pd.read_sql_query("SELECT grade AS 학년, class_name AS 학반, student_id AS 학번, student_name AS 이름, pin AS 비밀번호 FROM student_list ORDER BY student_id ASC", conn)
+                df_std = pd.read_sql_query("SELECT grade AS 학년, class_name AS 학반, student_id AS 번호, student_name AS 이름, pin AS 비밀번호 FROM student_list ORDER BY CAST(student_id AS INTEGER) ASC", conn)
                 conn.close()
                 st.dataframe(df_std, use_container_width=True)
 
@@ -344,14 +344,14 @@ else:
             api_key = st.text_input("OpenAI API Key 입력", type="password")
             
             conn = sqlite3.connect(DB_FILE)
-            df_all = pd.read_sql_query("SELECT * FROM reading_logs ORDER BY student_id ASC", conn)
+            df_all = pd.read_sql_query("SELECT * FROM reading_logs ORDER BY CAST(student_id AS INTEGER) ASC", conn)
             conn.close()
             
             if df_all.empty:
                 st.info("제출된 독서 기록이 없습니다.")
             else:
                 students = df_all['student_id'].unique()
-                sel_student = st.selectbox("학생 선택", students, format_func=lambda x: f"[{df_all[df_all['student_id']==x]['grade'].iloc[0]} {df_all[df_all['student_id']==x]['class_name'].iloc[0]}] {x} - {df_all[df_all['student_id']==x]['student_name'].iloc[0]}")
+                sel_student = st.selectbox("학생 선택", students, format_func=lambda x: f"[{df_all[df_all['student_id']==x]['grade'].iloc[0]} {df_all[df_all['student_id']==x]['class_name'].iloc[0]}] {x}번 - {df_all[df_all['student_id']==x]['student_name'].iloc[0]}")
                 
                 s_logs = df_all[df_all['student_id'] == sel_student]
                 s_name = s_logs['student_name'].iloc[0]
