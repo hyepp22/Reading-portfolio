@@ -7,7 +7,7 @@ import openai
 DB_FILE = "reading_portfolio.db"
 
 # -------------------------------------------------------------------
-# 1. DB 초기화 (기존 DB 구조 구버전 자동 업데이트 포함)
+# 1. DB 초기화 (기존 DB 구버전 자동 마이그레이션 포함)
 # -------------------------------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -67,6 +67,13 @@ def init_db():
             UNIQUE(student_id, book_title) ON CONFLICT REPLACE
         )
     ''')
+
+    # 기존 allowed_class_dates 테이블 구조 검사 후 grade 컬럼 없으면 삭제 후 재생성 (PK 충돌 방지)
+    c.execute("PRAGMA table_info(allowed_class_dates)")
+    cols = [col[1] for col in c.fetchall()]
+    if len(cols) > 0 and 'grade' not in cols:
+        c.execute("DROP TABLE allowed_class_dates")
+
     # 4) 학년/학반별 작성 허용 날짜 테이블
     c.execute('''
         CREATE TABLE IF NOT EXISTS allowed_class_dates (
@@ -78,8 +85,8 @@ def init_db():
         )
     ''')
 
-    # [마이그레이션] 기존 DB에 grade 컬럼이 없는 경우 누락된 컬럼 자동 추가
-    tables_to_check = ['student_list', 'reading_logs', 'evaluations', 'allowed_class_dates']
+    # [마이그레이션] باقي 테이블들에 grade 컬럼 누락 시 자동 추가
+    tables_to_check = ['student_list', 'reading_logs', 'evaluations']
     for table in tables_to_check:
         c.execute(f"PRAGMA table_info({table})")
         columns = [column[1] for column in c.fetchall()]
