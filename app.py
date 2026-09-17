@@ -7,14 +7,15 @@ import openai
 DB_FILE = "reading_portfolio.db"
 
 # -------------------------------------------------------------------
-# 1. DB 초기화 (학생 명단 테이블 학생명단 추가)
+# 1. DB 초기화 (grade 학년 컬럼 추가)
 # -------------------------------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # 1) 사전 등록 학생 명단 테이블
+    # 1) 학생 명단 테이블
     c.execute('''
         CREATE TABLE IF NOT EXISTS student_list (
+            grade TEXT,
             class_name TEXT,
             student_id TEXT PRIMARY KEY,
             student_name TEXT,
@@ -25,6 +26,7 @@ def init_db():
     c.execute('''
         CREATE TABLE IF NOT EXISTS reading_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            grade TEXT,
             class_name TEXT,
             student_id TEXT,
             student_name TEXT,
@@ -43,6 +45,8 @@ def init_db():
     c.execute('''
         CREATE TABLE IF NOT EXISTS evaluations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            grade TEXT,
+            class_name TEXT,
             student_id TEXT,
             student_name TEXT,
             book_title TEXT,
@@ -62,13 +66,14 @@ def init_db():
             UNIQUE(student_id, book_title) ON CONFLICT REPLACE
         )
     ''')
-    # 4) 학반별 작성 허용 날짜 테이블
+    # 4) 학년/학반별 작성 허용 날짜 테이블
     c.execute('''
         CREATE TABLE IF NOT EXISTS allowed_class_dates (
+            grade TEXT,
             class_name TEXT,
             allowed_date TEXT,
             session_num TEXT,
-            PRIMARY KEY (class_name, allowed_date)
+            PRIMARY KEY (grade, class_name, allowed_date)
         )
     ''')
     conn.commit()
@@ -111,43 +116,45 @@ st.sidebar.header("🔐 접속 모드")
 user_type = st.sidebar.radio("모드를 선택하세요", ["👨‍🎓 학생용 (독서 기록)", "👩‍🏫 교사용 (관리 및 자동채점)"])
 
 # -------------------------------------------------------------------
-# 4. 학생용 화면 (사전 명단 검증 로직 반영)
+# 4. 학생용 화면 (학년 선택 반영)
 # -------------------------------------------------------------------
 if user_type == "👨‍🎓 학생용 (독서 기록)":
     st.title("📚 나의 독서 포트폴리오 (학생용)")
     
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
-        class_name = st.selectbox("학반 선택", ["1반", "2반", "3반", "4반", "5반", "6반", "7반", "8반"], key="s_class")
+        grade = st.selectbox("학년 선택", ["1학년", "2학년", "3학년"], key="s_grade")
     with c2:
-        student_id = st.text_input("학번 (예: 10301)", key="s_id")
+        class_name = st.selectbox("학반 선택", ["1반", "2반", "3반", "4반", "5반", "6반", "7반", "8반"], key="s_class")
     with c3:
+        student_id = st.text_input("학번 (예: 10301)", key="s_id")
+    with c4:
         pin = st.text_input("지정 PIN 번호 4자리", type="password", key="s_pin")
     st.markdown("</div>", unsafe_allow_html=True)
 
     if student_id and pin:
-        # 학생 인증 절차 (교사 등록 명단 확인)
+        # 학생 인증 절차 (학년 + 학반 + 학번 + PIN 검증)
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("SELECT student_name FROM student_list WHERE class_name = ? AND student_id = ? AND pin = ?", 
-                  (class_name, student_id, pin))
+        c.execute("SELECT student_name FROM student_list WHERE grade = ? AND class_name = ? AND student_id = ? AND pin = ?", 
+                  (grade, class_name, student_id, pin))
         user_match = c.fetchone()
         conn.close()
 
         if not user_match:
-            st.error("❌ 학반, 학번 또는 비밀번호가 일치하지 않거나 등록되지 않은 학생입니다. 선생님께 문의하세요.")
+            st.error("❌ 학년, 학반, 학번 또는 비밀번호가 일치하지 않습니다. 선생님께 문의하세요.")
         else:
             student_name = user_match[0]
-            st.success(f"👋 **{class_name} {student_name}** 학생 환영합니다!")
+            st.success(f"👋 **[{grade} {class_name}] {student_name}** 학생 환영합니다!")
 
             today_str = date.today().strftime("%Y-%m-%d")
             
-            # 날짜 및 차시 체크
+            # 학년/학반별 허용 날짜 체크
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
-            c.execute("SELECT session_num FROM allowed_class_dates WHERE class_name = ? AND allowed_date = ?", 
-                      (class_name, today_str))
+            c.execute("SELECT session_num FROM allowed_class_dates WHERE grade = ? AND class_name = ? AND allowed_date = ?", 
+                      (grade, class_name, today_str))
             date_record = c.fetchone()
             conn.close()
 
@@ -155,11 +162,11 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
 
             with tab1:
                 if not date_record:
-                    st.error(f"⛔ [{class_name}]은(는) 오늘({today_str}) 독서 기록 작성 허용 날짜가 아닙니다.")
-                    st.info(f"💡 선생님이 [{class_name}]의 독서 수업 날짜로 지정한 날에만 작성할 수 있습니다.")
+                    st.error(f"⛔ [{grade} {class_name}]은(는) 오늘({today_str}) 독서 기록 작성 허용 날짜가 아닙니다.")
+                    st.info(f"💡 선생님이 [{grade} {class_name}]의 독서 수업 날짜로 지정한 날에만 작성할 수 있습니다.")
                 else:
                     session_name = date_record[0]
-                    st.info(f"📌 **현재 진행 차시:** {class_name} {session_name}")
+                    st.info(f"📌 **현재 진행 차시:** {grade} {class_name} - {session_name}")
                     
                     with st.form("tablet_reading_form"):
                         st.markdown("### 📖 기본 정보")
@@ -187,9 +194,9 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                                 c = conn.cursor()
                                 c.execute('''
                                     INSERT INTO reading_logs 
-                                    (class_name, student_id, student_name, book_title, author, log_date, pages_read, summary, quote, qa_pair, reflection)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                ''', (class_name, student_id, student_name, book_title, author, today_str, pages_read, summary, quote, qa_pair, reflection))
+                                    (grade, class_name, student_id, student_name, book_title, author, log_date, pages_read, summary, quote, qa_pair, reflection)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                ''', (grade, class_name, student_id, student_name, book_title, author, today_str, pages_read, summary, quote, qa_pair, reflection))
                                 conn.commit()
                                 conn.close()
                                 st.balloons()
@@ -212,7 +219,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                             st.write(f"**느낀점:** {row['reflection']}")
 
 # -------------------------------------------------------------------
-# 5. 교사용 화면 (학생 명단 등록 탭 추가)
+# 5. 교사용 화면 (학년 항목 관리 및 채점)
 # -------------------------------------------------------------------
 else:
     st.title("👩‍🏫 교사 관리 및 AI 자동 채점 시스템")
@@ -223,17 +230,17 @@ else:
     else:
         st.success("교사 인증이 완료되었습니다.")
         
-        t_tab1, t_tab2, t_tab3, t_tab4 = st.tabs(["👨‍🎓 학생 명단 등록", "📅 학반/차시별 날짜 설정", "🤖 AI 자동 채점 & 검토", "📥 성적 집계 다운로드"])
+        t_tab1, t_tab2, t_tab3, t_tab4 = st.tabs(["👨‍🎓 학생 명단 등록", "📅 학년/반/차시별 날짜 설정", "🤖 AI 자동 채점 & 검토", "📥 성적 집계 다운로드"])
         
-        # Tab 1: 학생 명단 등록 (개별 또는 엑셀 일괄 등록)
+        # Tab 1: 학년 포함 학생 명단 등록
         with t_tab1:
             st.markdown("### 👨‍🎓 학생 명단 사전 등록")
-            st.caption("학생들이 접속 시 인증할 [학반, 학번, 이름, PIN 4자리] 명단을 등록합니다.")
+            st.caption("학생들이 접속 시 인증할 [학년, 학반, 학번, 이름, PIN 4자리] 명단을 등록합니다.")
             
             c_m1, c_m2 = st.columns([1, 1])
             with c_m1:
                 st.markdown("#### 📄 엑셀 / CSV 파일로 일괄 업로드")
-                st.caption("양식 항목: `class_name` (예: 1반), `student_id` (예: 10301), `student_name`, `pin`")
+                st.caption("양식 열 이름: `grade` (예: 1학년), `class_name` (예: 1반), `student_id` (예: 10301), `student_name`, `pin`")
                 uploaded_file = st.file_uploader("명단 파일(CSV/Excel) 선택", type=["csv", "xlsx"])
                 if uploaded_file is not None:
                     try:
@@ -246,11 +253,11 @@ else:
                         for _, r in df_upload.iterrows():
                             c = conn.cursor()
                             c.execute('''
-                                INSERT INTO student_list (class_name, student_id, student_name, pin)
-                                VALUES (?, ?, ?, ?)
+                                INSERT INTO student_list (grade, class_name, student_id, student_name, pin)
+                                VALUES (?, ?, ?, ?, ?)
                                 ON CONFLICT(student_id) DO UPDATE SET 
-                                class_name=excluded.class_name, student_name=excluded.student_name, pin=excluded.pin
-                            ''', (str(r['class_name']), str(r['student_id']), str(r['student_name']), str(r['pin'])))
+                                grade=excluded.grade, class_name=excluded.class_name, student_name=excluded.student_name, pin=excluded.pin
+                            ''', (str(r['grade']), str(r['class_name']), str(r['student_id']), str(r['student_name']), str(r['pin'])))
                         conn.commit()
                         conn.close()
                         st.success("명단 일괄 업로드가 완료되었습니다!")
@@ -260,21 +267,22 @@ else:
                 st.markdown("---")
                 st.markdown("#### ✏️ 개별 직접 추가")
                 with st.form("single_student_form"):
+                    s_grade = st.selectbox("학년", ["1학년", "2학년", "3학년"])
                     s_class = st.selectbox("학반", ["1반", "2반", "3반", "4반", "5반", "6반", "7반", "8반"])
                     s_id = st.text_input("학번 (예: 10301)")
                     s_name = st.text_input("이름")
-                    s_pin = st.text_input("초기 비밀번호 4자리 (예: 生日 4자리)")
+                    s_pin = st.text_input("초기 비밀번호 4자리")
                     
                     if st.form_submit_button("학생 추가하기"):
                         if s_id and s_name and s_pin:
                             conn = sqlite3.connect(DB_FILE)
                             c = conn.cursor()
                             c.execute('''
-                                INSERT INTO student_list (class_name, student_id, student_name, pin)
-                                VALUES (?, ?, ?, ?)
+                                INSERT INTO student_list (grade, class_name, student_id, student_name, pin)
+                                VALUES (?, ?, ?, ?, ?)
                                 ON CONFLICT(student_id) DO UPDATE SET 
-                                class_name=excluded.class_name, student_name=excluded.student_name, pin=excluded.pin
-                            ''', (s_class, s_id, s_name, s_pin))
+                                grade=excluded.grade, class_name=excluded.class_name, student_name=excluded.student_name, pin=excluded.pin
+                            ''', (s_grade, s_class, s_id, s_name, s_pin))
                             conn.commit()
                             conn.close()
                             st.success(f"{s_name} 학생이 등록되었습니다.")
@@ -282,38 +290,39 @@ else:
             with c_m2:
                 st.markdown("#### 📋 현재 등록된 학생 명단")
                 conn = sqlite3.connect(DB_FILE)
-                df_std = pd.read_sql_query("SELECT class_name AS 학반, student_id AS 학번, student_name AS 이름, pin AS 비밀번호 FROM student_list ORDER BY student_id ASC", conn)
+                df_std = pd.read_sql_query("SELECT grade AS 학년, class_name AS 학반, student_id AS 학번, student_name AS 이름, pin AS 비밀번호 FROM student_list ORDER BY student_id ASC", conn)
                 conn.close()
                 st.dataframe(df_std, use_container_width=True)
 
-        # Tab 2: 학반 및 차시별 허용 날짜 설정
+        # Tab 2: 학년 및 반별 작성 허용 날짜 지정
         with t_tab2:
-            st.markdown("### 📅 학반별/차시별 독서 작성 허용 날짜 지정")
+            st.markdown("### 📅 학년/학반별 차시 독서 작성 허용 날짜 지정")
             col_d1, col_d2 = st.columns([1, 1])
             with col_d1:
                 with st.form("add_class_date_form"):
+                    target_grade = st.selectbox("학년 선택", ["1학년", "2학년", "3학년"])
                     target_class = st.selectbox("학반 선택", ["1반", "2반", "3반", "4반", "5반", "6반", "7반", "8반"])
                     session_num = st.selectbox("차시 선택", [f"{i}차시" for i in range(1, 18)])
                     target_date = st.date_input("작성 허용 날짜 지정", date.today()).strftime("%Y-%m-%d")
                     
-                    submit_date = st.form_submit_button("➕ 학반별 날짜 허용 등록")
+                    submit_date = st.form_submit_button("➕ 날짜 허용 등록")
                     if submit_date:
                         conn = sqlite3.connect(DB_FILE)
                         c = conn.cursor()
                         c.execute('''
-                            INSERT INTO allowed_class_dates (class_name, allowed_date, session_num)
-                            VALUES (?, ?, ?)
-                            ON CONFLICT(class_name, allowed_date) DO UPDATE SET session_num=excluded.session_num
-                        ''', (target_class, target_date, session_num))
+                            INSERT INTO allowed_class_dates (grade, class_name, allowed_date, session_num)
+                            VALUES (?, ?, ?, ?)
+                            ON CONFLICT(grade, class_name, allowed_date) DO UPDATE SET session_num=excluded.session_num
+                        ''', (target_grade, target_class, target_date, session_num))
                         conn.commit()
                         conn.close()
-                        st.success(f"[{target_class}] {session_num} - {target_date} 설정 완료!")
+                        st.success(f"[{target_grade} {target_class}] {session_num} - {target_date} 설정 완료!")
 
             with col_d2:
                 conn = sqlite3.connect(DB_FILE)
                 allowed_df = pd.read_sql_query("""
-                    SELECT class_name AS 학반, session_num AS 차시, allowed_date AS 작성허용날짜 
-                    FROM allowed_class_dates ORDER BY class_name ASC, allowed_date DESC
+                    SELECT grade AS 학년, class_name AS 학반, session_num AS 차시, allowed_date AS 작성허용날짜 
+                    FROM allowed_class_dates ORDER BY grade ASC, class_name ASC, allowed_date DESC
                 """, conn)
                 conn.close()
                 st.dataframe(allowed_df, use_container_width=True)
@@ -331,7 +340,7 @@ else:
                 st.info("제출된 독서 기록이 없습니다.")
             else:
                 students = df_all['student_id'].unique()
-                sel_student = st.selectbox("학생 선택", students, format_func=lambda x: f"[{df_all[df_all['student_id']==x]['class_name'].iloc[0]}] {x} - {df_all[df_all['student_id']==x]['student_name'].iloc[0]}")
+                sel_student = st.selectbox("학생 선택", students, format_func=lambda x: f"[{df_all[df_all['student_id']==x]['grade'].iloc[0]} {df_all[df_all['student_id']==x]['class_name'].iloc[0]}] {x} - {df_all[df_all['student_id']==x]['student_name'].iloc[0]}")
                 
                 s_logs = df_all[df_all['student_id'] == sel_student]
                 s_name = s_logs['student_name'].iloc[0]
