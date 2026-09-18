@@ -14,17 +14,16 @@ SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 @st.cache_resource
 def get_gspread_client():
     scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
+        "[https://spreadsheets.google.com/feeds](https://spreadsheets.google.com/feeds)",
+        "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)"
     ]
+    # Secrets 값을 불러온 뒤 \n 문자열을 실제 줄바꿈으로 변경해 줍니다.
     creds_dict = dict(st.secrets["gcp_service_account"])
+    if "private_key" in creds_dict:
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
-
-def get_worksheet(sheet_name):
-    gc = get_gspread_client()
-    sh = gc.open(SPREADSHEET_NAME)
-    return sh.worksheet(sheet_name)
 
 # -------------------------------------------------------------------
 # 2. UI 및 스타일 설정 (태블릿 최적화)
