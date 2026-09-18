@@ -5,9 +5,6 @@ import openai
 import gspread
 from google.oauth2.service_account import Credentials
 
-# -------------------------------------------------------------------
-# 1. Google Sheets 연동 설정 (google-auth 최신 방식 적용)
-# -------------------------------------------------------------------
 SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
 @st.cache_resource
@@ -16,14 +13,16 @@ def get_gspread_client():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    # Secrets 값을 딕셔너리로 불러옴
-    creds_dict = dict(st.secrets["gcp_service_account"])
     
-    # \n 문자열을 실제 줄바꿈 문자로 보정
-    if "private_key" in creds_dict:
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+    # Secrets 복사 후 dictionary 변환
+    info = dict(st.secrets["gcp_service_account"])
+    
+    # \n 문자가 남아있는 경우를 대비해 보정 처리
+    if "private_key" in info:
+        info["private_key"] = info["private_key"].replace("\\n", "\n")
         
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    # Credentials 생성 후 스코프 명시적 부여
+    creds = Credentials.from_service_account_info(info).with_scopes(scopes)
     return gspread.authorize(creds)
 
 def get_worksheet(sheet_name):
