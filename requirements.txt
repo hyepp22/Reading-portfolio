@@ -3,3 +3,4 @@ pandas
 openai
 gspread
 google-auth
+requests
