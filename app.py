@@ -3,23 +3,30 @@ import pandas as pd
 from datetime import datetime, date
 import openai
 import gspread
+from google.oauth2.service_account import Credentials
 
 # -------------------------------------------------------------------
-# 1. Google Sheets 연동 설정 (가장 안전한 서비스 계정 인증 방식)
+# 1. Google Sheets 연동 설정 (최신 google-auth 규격 적용)
 # -------------------------------------------------------------------
 SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def get_gspread_client():
-    # Secrets 값을 dictionary 형태로 읽기
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    
+    # Secrets 읽기
     creds_dict = dict(st.secrets["gcp_service_account"])
     
-    # private_key 내부의 \n 문자열 보정 처리
+    # \n 줄바꿈 보정 처리
     if "private_key" in creds_dict:
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        
-    # gspread 내장 인증 방식 적용 (<Response [200]> 오류 방지)
-    return gspread.service_account_from_dict(creds_dict)
+    
+    # 최신 google-auth 서비스 계정 인증
+    credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    return gspread.authorize(credentials)
 
 def get_worksheet(sheet_name):
     gc = get_gspread_client()
@@ -27,7 +34,7 @@ def get_worksheet(sheet_name):
     return sh.worksheet(sheet_name)
 
 # -------------------------------------------------------------------
-# 2. UI 및 스타일 설정 (태블릿/모바일 최적화)
+# 2. UI 및 스타일 설정
 # -------------------------------------------------------------------
 st.set_page_config(page_title="중학생 독서 포트폴리오", page_icon="📚", layout="wide")
 
@@ -83,7 +90,6 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                     ws_std = get_worksheet("student_list")
                     df_std = pd.DataFrame(ws_std.get_all_records())
                     
-                    # 한글 헤더 검증 ('학년', '반', '번호', '고유번호', '이름')
                     user_match = df_std[
                         (df_std['학년'].astype(str) == str(grade)) &
                         (df_std['반'].astype(str) == str(class_name)) &
@@ -119,7 +125,6 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
 
         today_str = date.today().strftime("%Y-%m-%d")
         
-        # 허용 날짜 시트 확인 (allowed_class_dates)
         try:
             ws_dates = get_worksheet("allowed_class_dates")
             df_dates = pd.DataFrame(ws_dates.get_all_records())
@@ -174,22 +179,21 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         else:
                             ws_logs = get_worksheet("reading_logs")
                             
-                            # 구글 시트 한글 헤더 순서대로 행 추가 (A~N열)
                             ws_logs.append_row([
-                                str(s_grade),         # A: 학년
-                                str(s_class),         # B: 반
-                                str(s_id),            # C: 번호
-                                str(s_name),          # D: 이름
-                                book_title,           # E: 책 제목
-                                author,               # F: 작가
-                                today_str,            # G: 날짜
-                                pages_read,           # H: 읽은 페이지
-                                summary,              # I: 요약
-                                quote,                # J: 인상깊은 내용
-                                question_text,        # K: 질문
-                                answer_text,          # L: 답변
-                                reflection,           # M: 느낀점
-                                datetime.now().strftime("%Y-%m-%d %H:%M:%S") # N: 생성일시
+                                str(s_grade),
+                                str(s_class),
+                                str(s_id),
+                                str(s_name),
+                                book_title,
+                                author,
+                                today_str,
+                                pages_read,
+                                summary,
+                                quote,
+                                question_text,
+                                answer_text,
+                                reflection,
+                                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             ])
                             st.balloons()
                             st.success("오늘의 독서 기록이 구글 시트에 안전하게 제출되었습니다!")
