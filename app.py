@@ -3,27 +3,27 @@ import pandas as pd
 from datetime import datetime, date
 import openai
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 
 # -------------------------------------------------------------------
-# 1. Google Sheets 연동 설정
+# 1. Google Sheets 연동 설정 (google-auth 최신 방식 적용)
 # -------------------------------------------------------------------
-# 구글 드라이브 스프레드시트 파일의 '제목'을 그대로 적어주세요.
 SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
 @st.cache_resource
 def get_gspread_client():
-    scope = [
-        "https://spreadsheets.google.com/feeds",
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
+    # Secrets 값을 딕셔너리로 불러옴
     creds_dict = dict(st.secrets["gcp_service_account"])
     
-    # private_key 내부의 \n 문자열을 실제 줄바꿈 문자로 변환 (Base64 오류 방지)
+    # \n 문자열을 실제 줄바꿈 문자로 보정
     if "private_key" in creds_dict:
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     return gspread.authorize(creds)
 
 def get_worksheet(sheet_name):
@@ -179,7 +179,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         else:
                             ws_logs = get_worksheet("reading_logs")
                             
-                            # 구글 시트 한글 헤더 순서대로 한 행 추가 (A~N열)
+                            # 구글 시트 한글 헤더 순서대로 행 추가 (A~N열)
                             ws_logs.append_row([
                                 str(s_grade),         # A: 학년
                                 str(s_class),         # B: 반
