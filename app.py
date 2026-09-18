@@ -14,19 +14,25 @@ SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 @st.cache_resource
 def get_gspread_client():
     scope = [
-        "[https://spreadsheets.google.com/feeds](https://spreadsheets.google.com/feeds)",
-        "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)"
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
     ]
-    # Secrets 값을 불러온 뒤 \n 문자열을 실제 줄바꿈으로 변경해 줍니다.
     creds_dict = dict(st.secrets["gcp_service_account"])
+    
+    # private_key 내부의 \n 문자열을 실제 줄바꿈 문자로 변환 (Base64 오류 방지)
     if "private_key" in creds_dict:
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
+def get_worksheet(sheet_name):
+    gc = get_gspread_client()
+    sh = gc.open(SPREADSHEET_NAME)
+    return sh.worksheet(sheet_name)
+
 # -------------------------------------------------------------------
-# 2. UI 및 스타일 설정 (태블릿 최적화)
+# 2. UI 및 스타일 설정 (태블릿/모바일 최적화)
 # -------------------------------------------------------------------
 st.set_page_config(page_title="중학생 독서 포트폴리오", page_icon="📚", layout="wide")
 
@@ -82,7 +88,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                     ws_std = get_worksheet("student_list")
                     df_std = pd.DataFrame(ws_std.get_all_records())
                     
-                    # 한글 헤더 기준 데이터 검증 ('학년', '반', '번호', '고유번호', '이름')
+                    # 한글 헤더 검증 ('학년', '반', '번호', '고유번호', '이름')
                     user_match = df_std[
                         (df_std['학년'].astype(str) == str(grade)) &
                         (df_std['반'].astype(str) == str(class_name)) &
@@ -118,21 +124,23 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
 
         today_str = date.today().strftime("%Y-%m-%d")
         
-        # 날짜 허용 시트 불러오기 (시트 이름: allowed_class_dates)
-        # 만약 이 시트도 한글 헤더(학년, 반, 날짜, 차시)로 만드신 경우 자동 대응
-        ws_dates = get_worksheet("allowed_class_dates")
-        df_dates = pd.DataFrame(ws_dates.get_all_records())
-        
-        grade_col = '학년' if '학년' in df_dates.columns else 'grade'
-        class_col = '반' if '반' in df_dates.columns else 'class_name'
-        date_col = '날짜' if '날짜' in df_dates.columns else 'allowed_date'
-        session_col = '차시' if '차시' in df_dates.columns else 'session_num'
+        # 허용 날짜 시트 확인 (allowed_class_dates)
+        try:
+            ws_dates = get_worksheet("allowed_class_dates")
+            df_dates = pd.DataFrame(ws_dates.get_all_records())
+            
+            grade_col = '학년' if '학년' in df_dates.columns else 'grade'
+            class_col = '반' if '반' in df_dates.columns else 'class_name'
+            date_col = '날짜' if '날짜' in df_dates.columns else 'allowed_date'
+            session_col = '차시' if '차시' in df_dates.columns else 'session_num'
 
-        date_record = df_dates[
-            (df_dates[grade_col].astype(str) == str(s_grade)) &
-            (df_dates[class_col].astype(str) == str(s_class)) &
-            (df_dates[date_col].astype(str) == str(today_str))
-        ]
+            date_record = df_dates[
+                (df_dates[grade_col].astype(str) == str(s_grade)) &
+                (df_dates[class_col].astype(str) == str(s_class)) &
+                (df_dates[date_col].astype(str) == str(today_str))
+            ]
+        except Exception:
+            date_record = pd.DataFrame()
 
         tab1, tab2 = st.tabs(["📝 오늘의 독서 기록 쓰기", "📖 내 과거 기록 보기"])
 
@@ -171,7 +179,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         else:
                             ws_logs = get_worksheet("reading_logs")
                             
-                            # 구글 시트에 순서대로 한 행 추가 (A~N열 한글 헤더와 1:1 대응)
+                            # 구글 시트 한글 헤더 순서대로 한 행 추가 (A~N열)
                             ws_logs.append_row([
                                 str(s_grade),         # A: 학년
                                 str(s_class),         # B: 반
@@ -192,26 +200,29 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                             st.success("오늘의 독서 기록이 구글 시트에 안전하게 제출되었습니다!")
 
         with tab2:
-            ws_logs = get_worksheet("reading_logs")
-            df_logs = pd.DataFrame(ws_logs.get_all_records())
-            
-            if not df_logs.empty:
-                my_logs = df_logs[
-                    (df_logs['학년'].astype(str) == str(s_grade)) &
-                    (df_logs['반'].astype(str) == str(s_class)) &
-                    (df_logs['번호'].astype(str) == str(s_id))
-                ]
-                if my_logs.empty:
-                    st.info("아직 제출된 기록이 없습니다.")
-                else:
-                    for idx, row in my_logs.iterrows():
-                        with st.expander(f"📌 [{row['날짜']}] {row['책 제목']} ({row['읽은 페이지']})"):
-                            st.write(f"**작가:** {row['작가']}")
-                            st.write(f"**줄거리 요약:** {row['요약']}")
-                            st.write(f"**인상 깊은 내용:** {row['인상깊은 내용']}")
-                            st.write(f"**질문:** {row['질문']}")
-                            st.write(f"**답변:** {row['답변']}")
-                            st.write(f"**느낀점:** {row['느낀점']}")
+            try:
+                ws_logs = get_worksheet("reading_logs")
+                df_logs = pd.DataFrame(ws_logs.get_all_records())
+                
+                if not df_logs.empty:
+                    my_logs = df_logs[
+                        (df_logs['학년'].astype(str) == str(s_grade)) &
+                        (df_logs['반'].astype(str) == str(s_class)) &
+                        (df_logs['번호'].astype(str) == str(s_id))
+                    ]
+                    if my_logs.empty:
+                        st.info("아직 제출된 기록이 없습니다.")
+                    else:
+                        for idx, row in my_logs.iterrows():
+                            with st.expander(f"📌 [{row['날짜']}] {row['책 제목']} ({row['읽은 페이지']})"):
+                                st.write(f"**작가:** {row['작가']}")
+                                st.write(f"**줄거리 요약:** {row['요약']}")
+                                st.write(f"**인상 깊은 내용:** {row['인상깊은 내용']}")
+                                st.write(f"**질문:** {row['질문']}")
+                                st.write(f"**답변:** {row['답변']}")
+                                st.write(f"**느낀점:** {row['느낀점']}")
+            except Exception as e:
+                st.error(f"기록 조회 오류: {e}")
 
 # -------------------------------------------------------------------
 # 5. 교사용 화면
@@ -227,22 +238,30 @@ else:
         
         with tab_t1:
             st.markdown("### 📊 학생 제출 기록 보기")
-            ws_logs = get_worksheet("reading_logs")
-            df_logs = pd.DataFrame(ws_logs.get_all_records())
-            
-            if df_logs.empty:
-                st.info("제출된 독서 기록이 없습니다.")
-            else:
-                st.dataframe(df_logs, use_container_width=True)
+            try:
+                ws_logs = get_worksheet("reading_logs")
+                df_logs = pd.DataFrame(ws_logs.get_all_records())
+                if df_logs.empty:
+                    st.info("제출된 독서 기록이 없습니다.")
+                else:
+                    st.dataframe(df_logs, use_container_width=True)
+            except Exception as e:
+                st.error(f"구글 시트 읽기 오류: {e}")
                 
         with tab_t2:
             st.markdown("### 📆 반별 작성 허용 날짜 등록")
-            ws_dates = get_worksheet("allowed_class_dates")
-            df_dates = pd.DataFrame(ws_dates.get_all_records())
-            st.dataframe(df_dates, use_container_width=True)
+            try:
+                ws_dates = get_worksheet("allowed_class_dates")
+                df_dates = pd.DataFrame(ws_dates.get_all_records())
+                st.dataframe(df_dates, use_container_width=True)
+            except Exception as e:
+                st.error(f"구글 시트 읽기 오류: {e}")
 
         with tab_t3:
             st.markdown("### 👥 등록된 학생 명단")
-            ws_std = get_worksheet("student_list")
-            df_std = pd.DataFrame(ws_std.get_all_records())
-            st.dataframe(df_std, use_container_width=True)
+            try:
+                ws_std = get_worksheet("student_list")
+                df_std = pd.DataFrame(ws_std.get_all_records())
+                st.dataframe(df_std, use_container_width=True)
+            except Exception as e:
+                st.error(f"구글 시트 읽기 오류: {e}")
