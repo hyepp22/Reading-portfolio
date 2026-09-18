@@ -3,27 +3,23 @@ import pandas as pd
 from datetime import datetime, date
 import openai
 import gspread
-from google.oauth2.service_account import Credentials
 
+# -------------------------------------------------------------------
+# 1. Google Sheets 연동 설정 (gspread 서비스 계정 직접 인증 방식)
+# -------------------------------------------------------------------
 SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
 @st.cache_resource
 def get_gspread_client():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
+    # Secrets 값을 딕셔너리로 불러오기
+    creds_dict = dict(st.secrets["gcp_service_account"])
     
-    # Secrets 복사 후 dictionary 변환
-    info = dict(st.secrets["gcp_service_account"])
-    
-    # \n 문자가 남아있는 경우를 대비해 보정 처리
-    if "private_key" in info:
-        info["private_key"] = info["private_key"].replace("\\n", "\n")
+    # private_key 내부의 \n 문자열을 실제 줄바꿈 문자로 변환
+    if "private_key" in creds_dict:
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
-    # Credentials 생성 후 스코프 명시적 부여
-    creds = Credentials.from_service_account_info(info).with_scopes(scopes)
-    return gspread.authorize(creds)
+    # gspread 내장 인증 방식 적용 (Response 200/토큰 충돌 방지)
+    return gspread.service_account_from_dict(creds_dict)
 
 def get_worksheet(sheet_name):
     gc = get_gspread_client()
