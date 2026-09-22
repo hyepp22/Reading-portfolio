@@ -16,7 +16,7 @@ from google.genai import types
 SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
 # AI 평가에 사용할 모델
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 
 # portfolio_scores 시트의 열 이름
 SCORE_HEADERS = [
