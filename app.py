@@ -69,13 +69,33 @@ def get_gspread_client():
     return gspread.authorize(credentials)
 
 
-def get_worksheet(sheet_name):
+@st.cache_resource(show_spinner=False)
+def get_spreadsheet():
 
     gc = get_gspread_client()
 
-    sh = gc.open(SPREADSHEET_NAME)
+    return gc.open(SPREADSHEET_NAME)
+
+
+def get_worksheet(sheet_name):
+
+    sh = get_spreadsheet()
 
     return sh.worksheet(sheet_name)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def read_sheet_records(sheet_name):
+    """Google Sheets 읽기를 30초 동안 캐시하여 API 읽기 요청을 줄입니다."""
+    ws = get_worksheet(sheet_name)
+    return ws.get_all_records()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def read_sheet_headers(sheet_name):
+    """시트 1행 헤더 읽기를 30초 동안 캐시합니다."""
+    ws = get_worksheet(sheet_name)
+    return ws.row_values(1)
 
 
 # ============================================================
@@ -225,7 +245,7 @@ def ensure_score_sheet():
 
     current_headers = [
         str(h).replace("\ufeff", "").strip()
-        for h in ws.row_values(1)
+        for h in read_sheet_headers("portfolio_scores")
     ]
 
     # 실제 portfolio_scores 시트에서는 띄어쓰기를 사용하고 있어도
@@ -306,7 +326,7 @@ def normalize_score_dataframe(df):
 
 def find_existing_evaluation(ws, evaluation_id):
 
-    records = ws.get_all_records()
+    records = read_sheet_records("portfolio_scores")
 
     if not records:
         return None, None
@@ -737,7 +757,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                     )
 
                     df_std = pd.DataFrame(
-                        ws_std.get_all_records()
+                        read_sheet_records("student_list")
                     )
 
                     user_match = df_std[
@@ -826,7 +846,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
             )
 
             df_dates = pd.DataFrame(
-                ws_dates.get_all_records()
+                read_sheet_records("allowed_class_dates")
             )
 
             grade_col = (
@@ -999,6 +1019,8 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                                 ]
                             )
 
+                            st.cache_data.clear()
+
                             st.balloons()
 
                             st.success(
@@ -1019,7 +1041,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                 )
 
                 df_logs = pd.DataFrame(
-                    ws_logs.get_all_records()
+                    read_sheet_records("reading_logs")
                 )
 
                 if not df_logs.empty:
@@ -1129,7 +1151,7 @@ else:
         )
 
         df_logs = pd.DataFrame(
-            ws_logs.get_all_records()
+            read_sheet_records("reading_logs")
         )
 
         ws_std = get_worksheet(
@@ -1137,12 +1159,12 @@ else:
         )
 
         df_std = pd.DataFrame(
-            ws_std.get_all_records()
+            read_sheet_records("student_list")
         )
 
         ws_scores = ensure_score_sheet()
 
-        score_records = ws_scores.get_all_records()
+        score_records = read_sheet_records("portfolio_scores")
 
         if score_records:
 
@@ -2216,6 +2238,8 @@ else:
                     ai_feedback,
                     teacher_feedback
                 )
+
+                st.cache_data.clear()
 
                 st.success(
                     f"✅ {student_name} 학생의 "
