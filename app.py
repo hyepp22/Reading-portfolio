@@ -2093,53 +2093,68 @@ else:
         )
 
         score_options = [
-            10,
-            15,
+            25,
             20,
-            25
+            15,
+            10
         ]
 
         # ----------------------------------------------------
-        # 교사 점수
+        # 교사 점수 - 버튼 선택 방식
         # ----------------------------------------------------
 
-        teacher_understanding = st.selectbox(
+        def score_button_selector(label, current_value, state_key):
+            """10/15/20/25점 중 하나를 버튼으로 선택합니다."""
+
+            if state_key not in st.session_state:
+                st.session_state[state_key] = (
+                    current_value
+                    if current_value in score_options
+                    else 10
+                )
+
+            st.markdown(f"**{label}**")
+
+            button_cols = st.columns(4)
+
+            for col, score in zip(button_cols, score_options):
+                with col:
+                    is_selected = (
+                        st.session_state[state_key] == score
+                    )
+
+                    if st.button(
+                        f"{'✓ ' if is_selected else ''}{score}점",
+                        key=f"{state_key}_{score}",
+                        use_container_width=True,
+                        type="primary" if is_selected else "secondary"
+                    ):
+                        st.session_state[state_key] = score
+
+            selected_score = st.session_state[state_key]
+
+            st.caption(
+                f"현재 선택: **{selected_score}점 / 25점**"
+            )
+
+            return selected_score
+
+        teacher_understanding = score_button_selector(
             "① 내용의 이해도",
-            score_options,
-            index=(
-                score_options.index(
-                    teacher_understanding
-                )
-                if teacher_understanding in score_options
-                else 0
-            ),
-            key=f"teacher_understanding_{evaluation_id}"
+            teacher_understanding,
+            f"teacher_understanding_{evaluation_id}"
         )
 
-        teacher_completeness = st.selectbox(
+        teacher_completeness = score_button_selector(
             "② 작성의 충실도",
-            score_options,
-            index=(
-                score_options.index(
-                    teacher_completeness
-                )
-                if teacher_completeness in score_options
-                else 0
-            ),
-            key=f"teacher_completeness_{evaluation_id}"
+            teacher_completeness,
+            f"teacher_completeness_{evaluation_id}"
         )
 
-        teacher_depth = st.selectbox(
+        teacher_depth = score_button_selector(
             "③ 감상의 깊이",
-            score_options,
-            index=(
-                score_options.index(
-                    teacher_depth
-                )
-                if teacher_depth in score_options
-                else 0
-            ),
-            key=f"teacher_depth_{evaluation_id}"
+            teacher_depth,
+            f"teacher_depth_{evaluation_id}"
         )
 
         # ----------------------------------------------------
