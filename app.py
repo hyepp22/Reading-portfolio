@@ -5,7 +5,8 @@ import json
 
 import gspread
 from google.oauth2.service_account import Credentials
-from openai import OpenAI
+from google import genai
+from google.genai import types
 
 
 # ============================================================
@@ -15,7 +16,7 @@ from openai import OpenAI
 SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
 # AI 평가에 사용할 모델
-OPENAI_MODEL = "gpt-5.6-luna"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 # portfolio_scores 시트의 열 이름
 SCORE_HEADERS = [
@@ -99,17 +100,30 @@ def read_sheet_headers(sheet_name):
 
 
 # ============================================================
-# 3. OpenAI 연결
+# 3. Gemini 연결
 # ============================================================
 
 @st.cache_resource(show_spinner=False)
-def get_openai_client():
-    api_key = st.secrets["OPENAI_API_KEY"].strip()
+def get_gemini_client():
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY")
 
-    if not api_key:
-        raise Exception("OPENAI_API_KEY가 비어 있습니다.")
+        if not api_key:
+            raise Exception(
+                "GEMINI_API_KEY를 Streamlit Secrets에서 찾지 못했습니다."
+            )
 
-    return OpenAI(api_key=api_key)
+        api_key = str(api_key).strip()
+
+        if not api_key:
+            raise Exception(
+                "GEMINI_API_KEY가 비어 있습니다."
+            )
+
+        return genai.Client(api_key=api_key)
+
+    except Exception as e:
+        raise Exception(f"Gemini 설정 확인 필요: {e}")
 
 
 # ============================================================
@@ -352,12 +366,7 @@ def find_existing_evaluation(ws, evaluation_id):
 
 def run_ai_evaluation(student_name, book_records):
 
-    client = get_openai_client()
-
-    if client is None:
-        raise Exception(
-            "OPENAI_API_KEY가 Streamlit Secrets에 없습니다."
-        )
+    client = get_gemini_client()
 
     # --------------------------------------------------------
     # 학생의 누적 기록을 AI가 읽을 수 있는 형태로 변환
@@ -464,7 +473,7 @@ def run_ai_evaluation(student_name, book_records):
 """
 
     # --------------------------------------------------------
-    # AI에게 줄 지시
+    # Gemini에게 줄 지시
     # --------------------------------------------------------
 
     system_prompt = f"""
@@ -499,48 +508,41 @@ def run_ai_evaluation(student_name, book_records):
 
 위 자료를 바탕으로 1~3번 영역을 평가하라.
 
-반드시 JSON 형식으로만 답하라.
-
-평가 결과에는 다음 항목을 포함한다.
-
-- 내용이해_점수
-- 작성충실도_점수
-- 감상의깊이_점수
-- 내용이해_근거
-- 작성충실도_근거
-- 감상의깊이_근거
-- 종합피드백
+각 영역은 반드시 10, 15, 20, 25 중 하나의 점수를 선택하라.
 
 종합피드백은 학생에게 직접 말하는 것이 아니라
 교사가 평가 결과를 참고할 수 있는 형태로 작성한다.
 """
 
+    # Gemini 구조화 출력용 JSON Schema
+    # Google 공식 Gemini API는 response_mime_type과
+    # response_schema를 사용해 JSON 형식 출력을 지원합니다.
     schema = {
-        "type": "object",
+        "type": "OBJECT",
         "properties": {
             "내용이해_점수": {
-                "type": "integer",
+                "type": "INTEGER",
                 "enum": [10, 15, 20, 25]
             },
             "작성충실도_점수": {
-                "type": "integer",
+                "type": "INTEGER",
                 "enum": [10, 15, 20, 25]
             },
             "감상의깊이_점수": {
-                "type": "integer",
+                "type": "INTEGER",
                 "enum": [10, 15, 20, 25]
             },
             "내용이해_근거": {
-                "type": "string"
+                "type": "STRING"
             },
             "작성충실도_근거": {
-                "type": "string"
+                "type": "STRING"
             },
             "감상의깊이_근거": {
-                "type": "string"
+                "type": "STRING"
             },
             "종합피드백": {
-                "type": "string"
+                "type": "STRING"
             }
         },
         "required": [
@@ -555,29 +557,39 @@ def run_ai_evaluation(student_name, book_records):
         "additionalProperties": False
     }
 
-    response = client.responses.create(
-        model=OPENAI_MODEL,
-        input=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_prompt
-            }
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
+            system_prompt,
+            user_prompt
         ],
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": "portfolio_evaluation",
-                "strict": True,
-                "schema": schema
-            }
-        }
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=schema,
+            temperature=0.2
+        )
     )
 
-    result = json.loads(response.output_text)
+    if not response.text:
+        raise Exception(
+            "Gemini가 빈 응답을 반환했습니다."
+        )
+
+    result = json.loads(response.text)
+
+    # 구조화 출력이더라도 애플리케이션에서 한 번 더 검증
+    allowed_scores = {10, 15, 20, 25}
+
+    for key in [
+        "내용이해_점수",
+        "작성충실도_점수",
+        "감상의깊이_점수"
+    ]:
+        if int(result[key]) not in allowed_scores:
+            raise Exception(
+                f"Gemini 평가 점수가 올바르지 않습니다: {result[key]}"
+            )
+        result[key] = int(result[key])
 
     return result
 
