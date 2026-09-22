@@ -521,16 +521,16 @@ def run_ai_evaluation(student_name, book_records):
         "type": "OBJECT",
         "properties": {
             "내용이해_점수": {
-                "type": "INTEGER",
-                "enum": [10, 15, 20, 25]
+                "type": "STRING",
+                "enum": ["10", "15", "20", "25"]
             },
             "작성충실도_점수": {
-                "type": "INTEGER",
-                "enum": [10, 15, 20, 25]
+                "type": "STRING",
+                "enum": ["10", "15", "20", "25"]
             },
             "감상의깊이_점수": {
-                "type": "INTEGER",
-                "enum": [10, 15, 20, 25]
+                "type": "STRING",
+                "enum": ["10", "15", "20", "25"]
             },
             "내용이해_근거": {
                 "type": "STRING"
