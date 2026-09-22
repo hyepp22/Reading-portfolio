@@ -553,8 +553,7 @@ def run_ai_evaluation(student_name, book_records):
             "작성충실도_근거",
             "감상의깊이_근거",
             "종합피드백"
-        ],
-        "additionalProperties": False
+        ]
     }
 
     response = client.models.generate_content(
