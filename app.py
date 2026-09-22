@@ -246,6 +246,28 @@ def ensure_score_sheet():
     return ws
 
 
+def normalize_score_dataframe(df):
+    """portfolio_scores 데이터를 항상 SCORE_HEADERS 구조로 맞춥니다."""
+
+    if df is None or df.empty:
+        return pd.DataFrame(columns=SCORE_HEADERS)
+
+    df = df.copy()
+
+    # 헤더 앞뒤 공백/BOM 제거
+    df.columns = [
+        str(col).replace("\ufeff", "").strip()
+        for col in df.columns
+    ]
+
+    # 필수 열이 없더라도 빈 열을 만들어 KeyError 방지
+    for col in SCORE_HEADERS:
+        if col not in df.columns:
+            df[col] = ""
+
+    return df[SCORE_HEADERS].copy()
+
+
 def find_existing_evaluation(ws, evaluation_id):
 
     records = ws.get_all_records()
@@ -253,13 +275,12 @@ def find_existing_evaluation(ws, evaluation_id):
     if not records:
         return None, None
 
-    df = pd.DataFrame(records)
-
-    if "평가ID" not in df.columns:
-        return None, None
+    df = normalize_score_dataframe(
+        pd.DataFrame(records)
+    )
 
     matches = df[
-        df["평가ID"].astype(str) == str(evaluation_id)
+        df["평가ID"].astype(str).str.strip() == str(evaluation_id).strip()
     ]
 
     if matches.empty:
@@ -1098,6 +1119,12 @@ else:
             df_scores = pd.DataFrame(
                 columns=SCORE_HEADERS
             )
+
+        # portfolio_scores의 실제 열 구조가 조금 달라도
+        # 항상 SCORE_HEADERS에 맞춰서 사용합니다.
+        df_scores = normalize_score_dataframe(
+            df_scores
+        )
 
     except Exception as e:
 
