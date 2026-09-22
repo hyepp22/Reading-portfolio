@@ -223,42 +223,78 @@ def ensure_score_sheet():
 
     ws = get_worksheet("portfolio_scores")
 
-    current_headers = ws.row_values(1)
+    current_headers = [
+        str(h).replace("\ufeff", "").strip()
+        for h in ws.row_values(1)
+    ]
 
-    if current_headers != SCORE_HEADERS:
+    # 실제 portfolio_scores 시트에서는 띄어쓰기를 사용하고 있어도
+    # 내부에서는 SCORE_HEADERS의 이름으로 통일해서 처리합니다.
+    if not current_headers:
+        ws.append_row(SCORE_HEADERS)
+        return ws
 
-        if len(current_headers) == 0:
-            ws.append_row(SCORE_HEADERS)
+    normalized_headers = normalize_header_names(current_headers)
+    missing = [h for h in SCORE_HEADERS if h not in normalized_headers]
 
-        else:
-            # 1행에 이미 다른 값이 있을 경우
-            # 필요한 헤더가 모두 있는지 확인
-            missing = [
-                h for h in SCORE_HEADERS
-                if h not in current_headers
-            ]
-
-            if missing:
-                st.warning(
-                    "⚠️ portfolio_scores 시트의 1행 제목을 확인해 주세요."
-                )
+    if missing:
+        st.warning(
+            "⚠️ portfolio_scores 시트의 1행 제목을 확인해 주세요.\n\n"
+            f"확인되지 않은 제목: {', '.join(missing)}"
+        )
 
     return ws
 
 
+def normalize_header_names(headers):
+    """
+    portfolio_scores의 실제 헤더 모양과 관계없이 내부 이름으로 통일합니다.
+    예: AI내용이해 / AI_내용이해 / AI 내용이해 → AI_내용이해
+    """
+
+    # 비교할 때는 공백과 밑줄을 모두 제거합니다.
+    # 그래서 시트에서 공백/밑줄을 어떻게 입력했든 인식할 수 있습니다.
+    canonical = {
+        "평가ID": "평가ID",
+        "학년": "학년",
+        "반": "반",
+        "번호": "번호",
+        "이름": "이름",
+        "AI내용이해": "AI_내용이해",
+        "AI작성충실도": "AI_작성충실도",
+        "AI감상의깊이": "AI_감상의깊이",
+        "작성횟수자동": "작성횟수_자동",
+        "AI총점": "AI_총점",
+        "교사내용이해": "교사_내용이해",
+        "교사작성충실도": "교사_작성충실도",
+        "교사감상의깊이": "교사_감상의깊이",
+        "교사작성횟수": "교사_작성횟수",
+        "최종점수": "최종점수",
+        "AI평가근거": "AI_평가근거",
+        "AI종합피드백": "AI_종합피드백",
+        "교사피드백": "교사_피드백",
+        "평가일": "평가일",
+    }
+
+    result = []
+    for h in headers:
+        text = str(h).replace("\ufeff", "").strip()
+        compact = text.replace(" ", "").replace("_", "")
+        result.append(canonical.get(compact, text))
+
+    return result
+
+
 def normalize_score_dataframe(df):
-    """portfolio_scores 데이터를 항상 SCORE_HEADERS 구조로 맞춥니다."""
+    """portfolio_scores 데이터를 내부 SCORE_HEADERS 구조로 맞춥니다."""
 
     if df is None or df.empty:
         return pd.DataFrame(columns=SCORE_HEADERS)
 
     df = df.copy()
 
-    # 헤더 앞뒤 공백/BOM 제거
-    df.columns = [
-        str(col).replace("\ufeff", "").strip()
-        for col in df.columns
-    ]
+    # 실제 시트의 띄어쓰기 헤더를 내부의 밑줄 헤더로 변환
+    df.columns = normalize_header_names(df.columns)
 
     # 필수 열이 없더라도 빈 열을 만들어 KeyError 방지
     for col in SCORE_HEADERS:
@@ -1310,10 +1346,25 @@ else:
                     student_label
                 ] = row
 
+        saved_selected_student = st.session_state.get(
+            "selected_student_label",
+            "전체"
+        )
+
+        if saved_selected_student not in student_options:
+            saved_selected_student = "전체"
+
+        # 버튼으로 학생을 선택한 경우 selectbox의 값도 함께 변경
+        st.session_state["teacher_student_select"] = saved_selected_student
+
         selected_student = st.selectbox(
             "학생",
-            student_options
+            student_options,
+            key="teacher_student_select"
         )
+
+        # 드롭다운에서 학생을 직접 선택한 경우에도 상태를 유지
+        st.session_state["selected_student_label"] = selected_student
 
     # ========================================================
     # 학생 목록
@@ -1424,9 +1475,29 @@ else:
             )
 
             st.info(
-                "👆 위 목록에서 특정 학생을 선택하면 "
-                "누적 독서 기록과 AI 평가 화면이 나타납니다."
+                "👆 위 표의 행을 직접 클릭하는 기능은 Streamlit의 data_editor가 아니면 선택값으로 연결되지 않습니다. "
+                "아래에서 학생 이름 옆의 [학생 보기] 버튼을 누르거나, 위의 학생 선택 메뉴에서 학생을 선택하세요."
             )
+
+            # 표의 학생을 실제로 선택할 수 있도록 버튼 제공
+            for _, student_row in temp_students.iterrows():
+                _grade = safe_str(student_row["학년"])
+                _class = safe_str(student_row["반"])
+                _num = safe_str(student_row["번호"])
+                _name = safe_str(student_row["이름"])
+                _label = f"{_num}번 {_name}"
+
+                _c1, _c2 = st.columns([5, 1])
+                with _c1:
+                    st.write(f"**{_label}**  ·  {_grade}학년 {_class}반")
+                with _c2:
+                    if st.button(
+                        "학생 보기",
+                        key=f"view_student_{_grade}_{_class}_{_num}",
+                        use_container_width=True
+                    ):
+                        st.session_state["selected_student_label"] = _label
+                        st.rerun()
 
             st.stop()
 
@@ -1673,9 +1744,9 @@ else:
         ai_reason = ""
         ai_feedback = ""
 
-        teacher_understanding = automatic_count_score
-        teacher_completeness = automatic_count_score
-        teacher_depth = automatic_count_score
+        teacher_understanding = 10
+        teacher_completeness = 10
+        teacher_depth = 10
         teacher_count = automatic_count_score
         teacher_feedback = ""
 
