@@ -103,14 +103,20 @@ def read_sheet_headers(sheet_name):
 # ============================================================
 
 @st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def get_openai_client():
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY")
 
-    if "OPENAI_API_KEY" not in st.secrets:
-        return None
+        if not api_key:
+            raise Exception(
+                "OPENAI_API_KEY를 Streamlit Secrets에서 찾지 못했습니다."
+            )
 
-    return OpenAI(
-        api_key=st.secrets["OPENAI_API_KEY"]
-    )
+        return OpenAI(api_key=api_key)
+
+    except Exception as e:
+        raise Exception(f"OpenAI 설정 확인 필요: {e}")
 
 
 # ============================================================
