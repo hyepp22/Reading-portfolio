@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date
 import json
+import time
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -17,6 +18,7 @@ SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
 # AI 평가에 사용할 모델
 GEMINI_MODEL = "gemini-3.6-flash"
+GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 
 # portfolio_scores 시트의 열 이름
 SCORE_HEADERS = [
@@ -556,18 +558,66 @@ def run_ai_evaluation(student_name, book_records):
         ]
     }
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[
-            system_prompt,
-            user_prompt
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=schema,
-            temperature=0.2
-        )
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=schema
     )
+
+    contents = [
+        system_prompt,
+        user_prompt
+    ]
+
+    def generate_with_retry(model_name, attempts=4):
+        last_error = None
+
+        for attempt in range(attempts):
+            try:
+                return client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config
+                )
+
+            except Exception as e:
+                last_error = e
+                error_text = str(e)
+
+                # 503 UNAVAILABLE처럼 일시적인 서버 과부하만 재시도
+                is_retryable = (
+                    "503" in error_text
+                    or "UNAVAILABLE" in error_text
+                    or "service_unavailable" in error_text
+                )
+
+                if not is_retryable or attempt >= attempts - 1:
+                    raise
+
+                # 3초 → 6초 → 12초로 대기 시간을 늘림
+                delay = 3 * (2 ** attempt)
+                time.sleep(delay)
+
+        raise last_error
+
+    try:
+        # 우선 Gemini 3.6 Flash로 시도
+        response = generate_with_retry(GEMINI_MODEL)
+
+    except Exception as primary_error:
+        primary_text = str(primary_error)
+
+        # 3.6 Flash가 일시적으로 503이면 3.5 Flash-Lite로 한 번 전환
+        if (
+            "503" in primary_text
+            or "UNAVAILABLE" in primary_text
+            or "service_unavailable" in primary_text
+        ):
+            response = generate_with_retry(
+                GEMINI_FALLBACK_MODEL,
+                attempts=2
+            )
+        else:
+            raise
 
     if not response.text:
         raise Exception(
