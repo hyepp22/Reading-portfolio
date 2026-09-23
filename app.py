@@ -192,6 +192,125 @@ def get_gemini_client():
         raise Exception(f"Gemini 설정 확인 필요: {e}")
 
 
+def run_worksheet_ocr(uploaded_files):
+    """
+    종이 독서 학습지 사진을 Gemini Vision으로 읽어
+    현재 학생 입력 화면의 각 항목에 맞는 구조화된 결과를 반환합니다.
+    """
+
+    if not uploaded_files:
+        raise Exception("학습지 사진을 먼저 선택해 주세요.")
+
+    client = get_gemini_client()
+
+    prompt = r"""
+너는 중학교 독서 포트폴리오 학습지의 손글씨를 읽어
+웹 입력창에 넣어 주는 OCR 보조 AI이다.
+
+사진은 다음과 같은 고정 양식의 학습지이다.
+
+1) 책 제목
+2) 작가
+3) 읽은 페이지: '쪽 ~ 쪽' 형태
+4) 오늘 읽은 내용 요약
+5) 인상 깊은 구절(장면)
+6) 그 구절(장면)을 고른 까닭
+7) 궁금한 것을 질문하고 답 예측 - 질문
+8) 궁금한 것을 질문하고 답 예측 - 답
+9) 나의 감상, 느낌
+
+학습지 오른쪽 위의 '교사 확인', '출판사' 등 학생 작성용이 아닌 영역은 무시한다.
+'읽은 날'은 사진에서 읽지 말고 프로그램에서 현재 날짜를 사용하므로 반환하지 않는다.
+
+중요한 규칙:
+- 사진에 실제로 보이는 학생의 글만 옮긴다. 내용을 요약하거나 고쳐 쓰거나 문장을 자연스럽게 바꾸지 않는다.
+- 손글씨가 불분명하면 추측하지 말고 가능한 범위에서 그대로 읽는다.
+- 빈칸은 빈 문자열로 반환한다.
+- 책 제목, 작가, 페이지 범위도 사진에 실제로 적힌 내용을 우선한다.
+- 페이지의 '쪽' 글자는 제외하고 숫자와 범위를 중심으로 반환한다. 예: '35 ~ 58쪽' -> '35~58'
+- 여러 장의 사진이 있다면 같은 학습지의 이어지는 부분으로 보고 내용을 합친다.
+- '구절(장면)'과 '까닭'은 반드시 분리한다.
+- 질문과 답도 반드시 분리한다.
+- OCR 결과에 설명이나 마크다운을 넣지 말고 JSON 형식으로만 반환한다.
+"""
+
+    schema = {
+        "type": "OBJECT",
+        "properties": {
+            "book_title": {"type": "STRING"},
+            "author": {"type": "STRING"},
+            "pages_read": {"type": "STRING"},
+            "summary": {"type": "STRING"},
+            "quote": {"type": "STRING"},
+            "quote_reason": {"type": "STRING"},
+            "question": {"type": "STRING"},
+            "answer": {"type": "STRING"},
+            "reflection": {"type": "STRING"}
+        },
+        "required": [
+            "book_title",
+            "author",
+            "pages_read",
+            "summary",
+            "quote",
+            "quote_reason",
+            "question",
+            "answer",
+            "reflection"
+        ]
+    }
+
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=schema
+    )
+
+    contents = [prompt]
+
+    for uploaded_file in uploaded_files:
+        contents.append(
+            types.Part.from_bytes(
+                data=uploaded_file.getvalue(),
+                mime_type=uploaded_file.type or "image/jpeg"
+            )
+        )
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=contents,
+        config=config
+    )
+
+    if not response.text:
+        raise Exception("사진에서 읽어 낸 내용이 없습니다.")
+
+    result = json.loads(response.text)
+
+    # 학습지의 '구절'과 '까닭'을 기존 웹앱의 하나의 입력창으로 합칩니다.
+    quote = str(result.get("quote", "")).strip()
+    quote_reason = str(result.get("quote_reason", "")).strip()
+
+    if quote and quote_reason:
+        combined_quote = f"구절(장면): {quote}\n\n까닭: {quote_reason}"
+    elif quote:
+        combined_quote = f"구절(장면): {quote}"
+    elif quote_reason:
+        combined_quote = f"까닭: {quote_reason}"
+    else:
+        combined_quote = ""
+
+    return {
+        "book_title": str(result.get("book_title", "")).strip(),
+        "author": str(result.get("author", "")).strip(),
+        "pages_read": str(result.get("pages_read", "")).strip(),
+        "summary": str(result.get("summary", "")).strip(),
+        "quote": combined_quote,
+        "question": str(result.get("question", "")).strip(),
+        "answer": str(result.get("answer", "")).strip(),
+        "reflection": str(result.get("reflection", "")).strip()
+    }
+
+
 # ============================================================
 # 4. 기본 UI 설정
 # ============================================================
@@ -1038,6 +1157,61 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                     f"{s_grade} {s_class} - {session_name}"
                 )
 
+                # ----------------------------------------------------
+                # 종이 학습지 사진 OCR 입력
+                # ----------------------------------------------------
+
+                st.markdown("### 📷 종이 학습지로 자동 입력")
+
+                st.caption(
+                    "학습지를 작성한 뒤 사진을 올리면, 사진 속 내용을 읽어 "
+                    "아래 입력칸에 자동으로 넣어 줍니다. OCR 결과는 반드시 확인·수정한 뒤 제출하세요."
+                )
+
+                worksheet_files = st.file_uploader(
+                    "학습지 사진 선택 (JPG, JPEG, PNG)",
+                    type=["jpg", "jpeg", "png"],
+                    accept_multiple_files=True,
+                    key="worksheet_ocr_files"
+                )
+
+                if st.button(
+                    "🔍 학습지 사진에서 내용 불러오기",
+                    use_container_width=True,
+                    type="secondary",
+                    key="worksheet_ocr_button"
+                ):
+
+                    if not worksheet_files:
+                        st.warning("먼저 학습지 사진을 선택해 주세요.")
+
+                    else:
+                        try:
+                            with st.spinner("🔍 학습지의 손글씨를 읽고 있습니다..."):
+                                ocr_result = run_worksheet_ocr(worksheet_files)
+
+                            # OCR 결과를 다음 화면의 입력창에 넣기 위해 저장
+                            st.session_state["reading_book_title"] = ocr_result["book_title"]
+                            st.session_state["reading_author"] = ocr_result["author"]
+                            st.session_state["reading_pages"] = ocr_result["pages_read"]
+                            st.session_state["reading_summary"] = ocr_result["summary"]
+                            st.session_state["reading_quote"] = ocr_result["quote"]
+                            st.session_state["reading_question"] = ocr_result["question"]
+                            st.session_state["reading_answer"] = ocr_result["answer"]
+                            st.session_state["reading_reflection"] = ocr_result["reflection"]
+
+                            st.session_state["worksheet_ocr_done"] = True
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(f"학습지 OCR 처리 중 오류가 발생했습니다: {e}")
+
+                if st.session_state.get("worksheet_ocr_done", False):
+                    st.success(
+                        "✅ 학습지 내용을 입력창에 불러왔습니다. "
+                        "내용을 확인·수정한 뒤 제출하세요."
+                    )
+
                 with st.form("reading_form"):
 
                     col_b1, col_b2 = st.columns(2)
@@ -1045,29 +1219,34 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                     with col_b1:
 
                         book_title = st.text_input(
-                            "책 제목 *"
+                            "책 제목 *",
+                            key="reading_book_title"
                         )
 
                         author = st.text_input(
-                            "작가 이름 *"
+                            "작가 이름 *",
+                            key="reading_author"
                         )
 
                     with col_b2:
 
                         pages_read = st.text_input(
                             "오늘 읽은 페이지 범위 "
-                            "(예: 12~35p) *"
+                            "(예: 12~35p) *",
+                            key="reading_pages"
                         )
 
                     summary = st.text_area(
                         "1. 오늘 읽은 내용 짧은 요약 "
                         "(핵심 줄거리) *",
-                        height=110
+                        height=110,
+                        key="reading_summary"
                     )
 
                     quote = st.text_area(
                         "2. 가장 인상 깊은 문장과 이유",
-                        height=90
+                        height=90,
+                        key="reading_quote"
                     )
 
                     st.markdown(
@@ -1081,7 +1260,8 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         question_text = st.text_area(
                             "3-1. 나의 질문",
                             height=100,
-                            placeholder="예: 주인공은 왜 그런 선택을 했을까?"
+                            placeholder="예: 주인공은 왜 그런 선택을 했을까?",
+                            key="reading_question"
                         )
 
                     with col_q2:
@@ -1089,13 +1269,15 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         answer_text = st.text_area(
                             "3-2. 질문에 대한 나의 생각/답변",
                             height=100,
-                            placeholder="예: 자신의 가치관을 지키기 위해서였을 것이다."
+                            placeholder="예: 자신의 가치관을 지키기 위해서였을 것이다.",
+                            key="reading_answer"
                         )
 
                     reflection = st.text_area(
                         "4. 나의 생각과 느낌 "
                         "(느낀점/깨달은점) *",
-                        height=130
+                        height=130,
+                        key="reading_reflection"
                     )
 
                     submit_btn = st.form_submit_button(
@@ -1151,6 +1333,8 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                                 "오늘의 독서 기록이 "
                                 "구글 시트에 안전하게 제출되었습니다!"
                             )
+
+                            st.session_state["worksheet_ocr_done"] = False
 
         # ----------------------------------------------------
         # 과거 기록
