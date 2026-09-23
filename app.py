@@ -13,66 +13,195 @@ from google.genai import types
 # 학생 입력창 붙여넣기 차단
 # ============================================================
 
-def disable_paste():
+def disable_reading_paste():
+    """
+    학생의 독서 내용 작성 5개 입력창에서만 붙여넣기를 차단합니다.
+
+    붙여넣기 가능:
+    - 책 제목
+    - 작가 이름
+    - 오늘 읽은 페이지 범위
+
+    붙여넣기 차단:
+    - 오늘 읽은 내용 짧은 요약
+    - 가장 인상 깊은 문장과 이유
+    - 나의 질문
+    - 질문에 대한 나의 생각/답변
+    - 나의 생각과 느낌
+    """
 
     st.markdown(
         """
         <script>
-        // Ctrl + V / Ctrl + Shift + V / Shift + Insert 차단
-        document.addEventListener(
-            "keydown",
-            function(event) {
+        (function () {
 
-                if (
-                    (event.ctrlKey &&
-                    (event.key === "v" ||
-                     event.key === "V")) ||
+            const TARGET_LABELS = [
+                "1. 오늘 읽은 내용 짧은 요약",
+                "2. 가장 인상 깊은 문장과 이유",
+                "3-1. 나의 질문",
+                "3-2. 질문에 대한 나의 생각/답변",
+                "4. 나의 생각과 느낌"
+            ];
 
-                    (event.shiftKey &&
-                    event.key === "Insert")
-                ) {
-                    event.preventDefault();
+            function isTarget(textarea) {
 
-                    alert(
-                        "📢 붙여넣기는 사용할 수 없습니다.\\n직접 입력해 주세요."
-                    );
-                }
-            },
-            true
-        );
-
-
-        // 우클릭 메뉴 차단
-        document.addEventListener(
-            "contextmenu",
-            function(event) {
-
-                event.preventDefault();
-
-            },
-            true
-        );
-
-
-        // 붙여넣기 이벤트 자체 차단
-        document.addEventListener(
-            "paste",
-            function(event) {
-
-                event.preventDefault();
-
-                alert(
-                    "📢 붙여넣기는 사용할 수 없습니다.\\n직접 입력해 주세요."
+                const box = textarea.closest(
+                    '[data-testid="stTextArea"]'
                 );
 
-            },
-            true
-        );
+                if (!box) {
+                    return false;
+                }
 
+                const text = box.innerText || "";
+
+                return TARGET_LABELS.some(function(label) {
+                    return text.includes(label);
+                });
+            }
+
+            function showBlockedMessage() {
+
+                const now = Date.now();
+
+                if (
+                    window.__readingPasteAlertTime &&
+                    now - window.__readingPasteAlertTime < 700
+                ) {
+                    return;
+                }
+
+                window.__readingPasteAlertTime = now;
+
+                alert(
+                    "📚 이 항목은 직접 작성해야 합니다.\\n\\n" +
+                    "붙여넣기는 사용할 수 없습니다."
+                );
+            }
+
+            function blockPaste(event) {
+
+                event.preventDefault();
+                event.stopPropagation();
+                showBlockedMessage();
+            }
+
+            function blockBeforeInput(event) {
+
+                if (
+                    event.inputType === "insertFromPaste" ||
+                    event.inputType === "insertFromPasteAsQuotation"
+                ) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    showBlockedMessage();
+                }
+            }
+
+            function blockKeyboard(event) {
+
+                const key = String(
+                    event.key || ""
+                ).toLowerCase();
+
+                // Ctrl + V / Cmd + V
+                if (
+                    (event.ctrlKey || event.metaKey) &&
+                    key === "v"
+                ) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    showBlockedMessage();
+                    return;
+                }
+
+                // Shift + Insert
+                if (
+                    event.shiftKey &&
+                    event.key === "Insert"
+                ) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    showBlockedMessage();
+                }
+            }
+
+            function blockContextMenu(event) {
+
+                event.preventDefault();
+                event.stopPropagation();
+                showBlockedMessage();
+            }
+
+            function applyProtection() {
+
+                document
+                    .querySelectorAll("textarea")
+                    .forEach(function(textarea) {
+
+                        if (!isTarget(textarea)) {
+                            return;
+                        }
+
+                        // 이미 적용한 입력창에는 중복으로 이벤트를 붙이지 않음
+                        if (
+                            textarea.dataset.readingPasteBlocked === "true"
+                        ) {
+                            return;
+                        }
+
+                        textarea.dataset.readingPasteBlocked = "true";
+
+                        textarea.addEventListener(
+                            "paste",
+                            blockPaste,
+                            true
+                        );
+
+                        textarea.addEventListener(
+                            "beforeinput",
+                            blockBeforeInput,
+                            true
+                        );
+
+                        textarea.addEventListener(
+                            "keydown",
+                            blockKeyboard,
+                            true
+                        );
+
+                        textarea.addEventListener(
+                            "contextmenu",
+                            blockContextMenu,
+                            true
+                        );
+                    });
+            }
+
+            // 처음 실행
+            applyProtection();
+
+            // Streamlit이 화면을 다시 그려도 계속 적용
+            const observer = new MutationObserver(
+                function() {
+                    applyProtection();
+                }
+            );
+
+            observer.observe(
+                document.body,
+                {
+                    childList: true,
+                    subtree: true
+                }
+            );
+
+        })();
         </script>
         """,
         unsafe_allow_html=True
     )
+
 
 # ============================================================
 # 1. 기본 설정
@@ -1062,12 +1191,14 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                     summary = st.text_area(
                         "1. 오늘 읽은 내용 짧은 요약 "
                         "(핵심 줄거리) *",
-                        height=110
+                        height=110,
+                        key="reading_summary"
                     )
 
                     quote = st.text_area(
                         "2. 가장 인상 깊은 문장과 이유",
-                        height=90
+                        height=90,
+                        key="reading_quote"
                     )
 
                     st.markdown(
@@ -1081,7 +1212,8 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         question_text = st.text_area(
                             "3-1. 나의 질문",
                             height=100,
-                            placeholder="예: 주인공은 왜 그런 선택을 했을까?"
+                            placeholder="예: 주인공은 왜 그런 선택을 했을까?",
+                            key="reading_question"
                         )
 
                     with col_q2:
@@ -1089,14 +1221,20 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         answer_text = st.text_area(
                             "3-2. 질문에 대한 나의 생각/답변",
                             height=100,
-                            placeholder="예: 자신의 가치관을 지키기 위해서였을 것이다."
+                            placeholder="예: 자신의 가치관을 지키기 위해서였을 것이다.",
+                            key="reading_answer"
                         )
 
                     reflection = st.text_area(
                         "4. 나의 생각과 느낌 "
                         "(느낀점/깨달은점) *",
-                        height=130
+                        height=130,
+                        key="reading_reflection"
                     )
+
+                    # 책 제목 / 작가 / 페이지 입력창은 건드리지 않고
+                    # 아래 5개의 독서 내용 입력창에만 붙여넣기 차단 적용
+                    disable_reading_paste()
 
                     submit_btn = st.form_submit_button(
                         "🚀 독서 기록 제출하기",
