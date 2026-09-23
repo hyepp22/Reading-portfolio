@@ -2606,8 +2606,9 @@ else:
             "👥 학생 목록으로 돌아가기",
             use_container_width=True
         ):
+            # selectbox가 이미 생성된 뒤에는 그 위젯의 session_state 값을
+            # 직접 변경하지 않고, 다음 실행에서 사용할 선택값만 변경합니다.
             st.session_state["selected_student_label"] = "전체"
-            st.session_state["teacher_student_select"] = "전체"
             st.rerun()
 
         # ----------------------------------------------------
