@@ -460,6 +460,24 @@ def delete_reading_log(ws, sheet_row):
     ws.delete_rows(sheet_row)
 
 
+def is_reading_log_editable(log_date, today_str):
+    """
+    독서 기록의 수정 가능 여부를 확인합니다.
+
+    학생이 기록을 작성한 허용 날짜 당일까지만 수정할 수 있고,
+    날짜가 지나면 수정은 막고 삭제만 허용합니다.
+    """
+    log_date = safe_str(log_date).strip()
+    today_str = safe_str(today_str).strip()
+
+    if not log_date or not today_str:
+        return False
+
+    # 날짜에 시간이 함께 저장된 경우에도 앞의 YYYY-MM-DD만 비교
+    log_date_only = log_date[:10]
+    return log_date_only == today_str
+
+
 def safe_str(value):
     """빈칸/NaN을 안전하게 문자열로 변환"""
     if pd.isna(value):
@@ -1438,8 +1456,8 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                     else:
 
                         st.caption(
-                            "잘못 입력한 내용은 수정하거나 삭제할 수 있습니다. "
-                            "수정 후에는 저장된 기록에도 바로 반영됩니다."
+                            "📌 독서 기록은 작성 허용 날짜 당일에만 수정할 수 있습니다. "
+                            "허용 날짜가 지나면 수정은 불가능하며 삭제만 할 수 있습니다."
                         )
 
                         editing_row = st.session_state.get(
@@ -1458,6 +1476,19 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                             log_date = safe_str(row.get("날짜"))
                             book_title = safe_str(row.get("책 제목"))
                             pages_read = safe_str(row.get("읽은 페이지"))
+                            edit_allowed = is_reading_log_editable(
+                                log_date,
+                                today_str
+                            )
+
+                            # 날짜가 지나서 수정 상태가 남아 있는 경우에도
+                            # 서버 측에서 수정 화면 진입을 막습니다.
+                            if not edit_allowed and sheet_row == editing_row:
+                                st.session_state.pop(
+                                    "editing_reading_log_row",
+                                    None
+                                )
+                                editing_row = None
 
                             with st.expander(
                                 f"📌 [{log_date}] "
@@ -1531,7 +1562,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                                 # ------------------------------
                                 # 수정 화면
                                 # ------------------------------
-                                if sheet_row == editing_row:
+                                if sheet_row == editing_row and edit_allowed:
 
                                     st.info(
                                         "✏️ 잘못 입력한 내용을 수정한 뒤 "
@@ -1601,6 +1632,22 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                                             key=f"save_edit_{sheet_row}"
                                         ):
 
+                                            # 저장 버튼을 누르는 순간에도 날짜를 다시 확인하여
+                                            # 허용 날짜가 지난 기록은 수정되지 않도록 합니다.
+                                            if not is_reading_log_editable(
+                                                log_date,
+                                                today_str
+                                            ):
+                                                st.session_state.pop(
+                                                    "editing_reading_log_row",
+                                                    None
+                                                )
+                                                st.error(
+                                                    "🔒 수정 가능한 날짜가 지났습니다. "
+                                                    "이 기록은 삭제만 할 수 있습니다."
+                                                )
+                                                st.rerun()
+
                                             if (
                                                 not edit_book_title.strip()
                                                 or not edit_pages.strip()
@@ -1661,19 +1708,27 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                                 ac1, ac2 = st.columns(2)
 
                                 with ac1:
-                                    if st.button(
-                                        "✏️ 수정",
-                                        use_container_width=True,
-                                        key=f"edit_log_{sheet_row}"
-                                    ):
-                                        st.session_state[
-                                            "editing_reading_log_row"
-                                        ] = sheet_row
-                                        st.session_state.pop(
-                                            "deleting_reading_log_row",
-                                            None
+                                    if edit_allowed:
+                                        if st.button(
+                                            "✏️ 수정",
+                                            use_container_width=True,
+                                            key=f"edit_log_{sheet_row}"
+                                        ):
+                                            st.session_state[
+                                                "editing_reading_log_row"
+                                            ] = sheet_row
+                                            st.session_state.pop(
+                                                "deleting_reading_log_row",
+                                                None
+                                            )
+                                            st.rerun()
+                                    else:
+                                        st.button(
+                                            "🔒 수정 기간 종료",
+                                            use_container_width=True,
+                                            disabled=True,
+                                            key=f"edit_locked_{sheet_row}"
                                         )
-                                        st.rerun()
 
                                 with ac2:
                                     if st.button(
@@ -1689,6 +1744,12 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                                             None
                                         )
                                         st.rerun()
+
+                                if not edit_allowed:
+                                    st.caption(
+                                        "🔒 작성 허용 날짜가 지나 이 기록은 수정할 수 없습니다. "
+                                        "필요한 경우 삭제만 할 수 있습니다."
+                                    )
 
                                 st.write(
                                     f"**작가:** {safe_str(row.get('작가'))}"
