@@ -2,11 +2,77 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date
 import json
+import time
 
 import gspread
 from google.oauth2.service_account import Credentials
-from openai import OpenAI
+from google import genai
+from google.genai import types
 
+# ============================================================
+# 학생 입력창 붙여넣기 차단
+# ============================================================
+
+def disable_paste():
+
+    st.markdown(
+        """
+        <script>
+        // Ctrl + V / Ctrl + Shift + V / Shift + Insert 차단
+        document.addEventListener(
+            "keydown",
+            function(event) {
+
+                if (
+                    (event.ctrlKey &&
+                    (event.key === "v" ||
+                     event.key === "V")) ||
+
+                    (event.shiftKey &&
+                    event.key === "Insert")
+                ) {
+                    event.preventDefault();
+
+                    alert(
+                        "📢 붙여넣기는 사용할 수 없습니다.\\n직접 입력해 주세요."
+                    );
+                }
+            },
+            true
+        );
+
+
+        // 우클릭 메뉴 차단
+        document.addEventListener(
+            "contextmenu",
+            function(event) {
+
+                event.preventDefault();
+
+            },
+            true
+        );
+
+
+        // 붙여넣기 이벤트 자체 차단
+        document.addEventListener(
+            "paste",
+            function(event) {
+
+                event.preventDefault();
+
+                alert(
+                    "📢 붙여넣기는 사용할 수 없습니다.\\n직접 입력해 주세요."
+                );
+
+            },
+            true
+        );
+
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
 
 # ============================================================
 # 1. 기본 설정
@@ -15,7 +81,8 @@ from openai import OpenAI
 SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
 # AI 평가에 사용할 모델
-OPENAI_MODEL = "gpt-5.6-luna"
+GEMINI_MODEL = "gemini-3.6-flash"
+GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 
 # portfolio_scores 시트의 열 이름
 SCORE_HEADERS = [
@@ -69,28 +136,60 @@ def get_gspread_client():
     return gspread.authorize(credentials)
 
 
-def get_worksheet(sheet_name):
+@st.cache_resource(show_spinner=False)
+def get_spreadsheet():
 
     gc = get_gspread_client()
 
-    sh = gc.open(SPREADSHEET_NAME)
+    return gc.open(SPREADSHEET_NAME)
+
+
+def get_worksheet(sheet_name):
+
+    sh = get_spreadsheet()
 
     return sh.worksheet(sheet_name)
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def read_sheet_records(sheet_name):
+    """Google Sheets 읽기를 30초 동안 캐시하여 API 읽기 요청을 줄입니다."""
+    ws = get_worksheet(sheet_name)
+    return ws.get_all_records()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def read_sheet_headers(sheet_name):
+    """시트 1행 헤더 읽기를 30초 동안 캐시합니다."""
+    ws = get_worksheet(sheet_name)
+    return ws.row_values(1)
+
+
 # ============================================================
-# 3. OpenAI 연결
+# 3. Gemini 연결
 # ============================================================
 
 @st.cache_resource(show_spinner=False)
-def get_openai_client():
+def get_gemini_client():
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY")
 
-    if "OPENAI_API_KEY" not in st.secrets:
-        return None
+        if not api_key:
+            raise Exception(
+                "GEMINI_API_KEY를 Streamlit Secrets에서 찾지 못했습니다."
+            )
 
-    return OpenAI(
-        api_key=st.secrets["OPENAI_API_KEY"]
-    )
+        api_key = str(api_key).strip()
+
+        if not api_key:
+            raise Exception(
+                "GEMINI_API_KEY가 비어 있습니다."
+            )
+
+        return genai.Client(api_key=api_key)
+
+    except Exception as e:
+        raise Exception(f"Gemini 설정 확인 필요: {e}")
 
 
 # ============================================================
@@ -223,43 +322,100 @@ def ensure_score_sheet():
 
     ws = get_worksheet("portfolio_scores")
 
-    current_headers = ws.row_values(1)
+    current_headers = [
+        str(h).replace("\ufeff", "").strip()
+        for h in read_sheet_headers("portfolio_scores")
+    ]
 
-    if current_headers != SCORE_HEADERS:
+    # 실제 portfolio_scores 시트에서는 띄어쓰기를 사용하고 있어도
+    # 내부에서는 SCORE_HEADERS의 이름으로 통일해서 처리합니다.
+    if not current_headers:
+        ws.append_row(SCORE_HEADERS)
+        return ws
 
-        if len(current_headers) == 0:
-            ws.append_row(SCORE_HEADERS)
+    normalized_headers = normalize_header_names(current_headers)
+    missing = [h for h in SCORE_HEADERS if h not in normalized_headers]
 
-        else:
-            # 1행에 이미 다른 값이 있을 경우
-            # 필요한 헤더가 모두 있는지 확인
-            missing = [
-                h for h in SCORE_HEADERS
-                if h not in current_headers
-            ]
-
-            if missing:
-                st.warning(
-                    "⚠️ portfolio_scores 시트의 1행 제목을 확인해 주세요."
-                )
+    if missing:
+        st.warning(
+            "⚠️ portfolio_scores 시트의 1행 제목을 확인해 주세요.\n\n"
+            f"확인되지 않은 제목: {', '.join(missing)}"
+        )
 
     return ws
 
 
+def normalize_header_names(headers):
+    """
+    portfolio_scores의 실제 헤더 모양과 관계없이 내부 이름으로 통일합니다.
+    예: AI내용이해 / AI_내용이해 / AI 내용이해 → AI_내용이해
+    """
+
+    # 비교할 때는 공백과 밑줄을 모두 제거합니다.
+    # 그래서 시트에서 공백/밑줄을 어떻게 입력했든 인식할 수 있습니다.
+    canonical = {
+        "평가ID": "평가ID",
+        "학년": "학년",
+        "반": "반",
+        "번호": "번호",
+        "이름": "이름",
+        "AI내용이해": "AI_내용이해",
+        "AI작성충실도": "AI_작성충실도",
+        "AI감상의깊이": "AI_감상의깊이",
+        "작성횟수자동": "작성횟수_자동",
+        "AI총점": "AI_총점",
+        "교사내용이해": "교사_내용이해",
+        "교사작성충실도": "교사_작성충실도",
+        "교사감상의깊이": "교사_감상의깊이",
+        "교사작성횟수": "교사_작성횟수",
+        "최종점수": "최종점수",
+        "AI평가근거": "AI_평가근거",
+        "AI종합피드백": "AI_종합피드백",
+        "교사피드백": "교사_피드백",
+        "평가일": "평가일",
+    }
+
+    result = []
+    for h in headers:
+        text = str(h).replace("\ufeff", "").strip()
+        compact = text.replace(" ", "").replace("_", "")
+        result.append(canonical.get(compact, text))
+
+    return result
+
+
+def normalize_score_dataframe(df):
+    """portfolio_scores 데이터를 내부 SCORE_HEADERS 구조로 맞춥니다."""
+
+    if df is None or df.empty:
+        return pd.DataFrame(columns=SCORE_HEADERS)
+
+    df = df.copy()
+
+    # 실제 시트의 띄어쓰기 헤더를 내부의 밑줄 헤더로 변환
+    df.columns = normalize_header_names(df.columns)
+
+    # 필수 열이 없더라도 빈 열을 만들어 KeyError 방지
+    for col in SCORE_HEADERS:
+        if col not in df.columns:
+            df[col] = ""
+
+    return df[SCORE_HEADERS].copy()
+
+
 def find_existing_evaluation(ws, evaluation_id):
 
-    records = ws.get_all_records()
+    records = read_sheet_records("portfolio_scores")
 
     if not records:
         return None, None
 
-    df = pd.DataFrame(records)
-
-    if "평가ID" not in df.columns:
-        return None, None
+    df = normalize_score_dataframe(
+        pd.DataFrame(records)
+    )
 
     matches = df[
-        df["평가ID"].astype(str) == str(evaluation_id)
+        df["평가ID"].astype(str).str.strip() == str(evaluation_id).strip()
     ]
 
     if matches.empty:
@@ -271,203 +427,12 @@ def find_existing_evaluation(ws, evaluation_id):
 
 
 # ============================================================
-# 독서 기록 입력창 붙여넣기 차단
-# ============================================================
-
-def block_reading_paste():
-    """
-    학생의 독서 내용 작성 5개 입력창에서만
-    붙여넣기(Ctrl+V / Cmd+V / 마우스 우클릭 붙여넣기)를 차단한다.
-
-    책 제목, 작가 이름, 페이지 범위 입력창은 차단하지 않는다.
-    """
-
-    st.markdown(
-        """
-        <script>
-        (function () {
-
-            const TARGET_LABELS = [
-                "1. 오늘 읽은 내용 짧은 요약",
-                "2. 가장 인상 깊은 문장과 이유",
-                "3-1. 나의 질문",
-                "3-2. 질문에 대한 나의 생각/답변",
-                "4. 나의 생각과 느낌"
-            ];
-
-            function getTextAreaBox(textarea) {
-                return textarea.closest(
-                    '[data-testid="stTextArea"]'
-                );
-            }
-
-            function isTargetTextArea(textarea) {
-
-                const box = getTextAreaBox(textarea);
-
-                if (!box) {
-                    return false;
-                }
-
-                const boxText = box.innerText || "";
-
-                return TARGET_LABELS.some(function(label) {
-                    return boxText.includes(label);
-                });
-            }
-
-            function showMessage() {
-
-                const now = Date.now();
-
-                if (
-                    window.__readingPasteLastAlert &&
-                    now - window.__readingPasteLastAlert < 700
-                ) {
-                    return;
-                }
-
-                window.__readingPasteLastAlert = now;
-
-                alert(
-                    "📚 이 항목은 직접 작성하는 독서 기록입니다.\\n\\n" +
-                    "요약, 인상 깊은 내용, 질문, 답변, 느낀점은 " +
-                    "붙여넣기할 수 없습니다."
-                );
-            }
-
-            function blockPaste(event) {
-
-                event.preventDefault();
-                event.stopPropagation();
-                showMessage();
-            }
-
-            function blockBeforeInput(event) {
-
-                if (
-                    event.inputType === "insertFromPaste" ||
-                    event.inputType === "insertFromPasteAsQuotation"
-                ) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    showMessage();
-                }
-            }
-
-            function blockKeyboardPaste(event) {
-
-                const key = String(event.key || "").toLowerCase();
-
-                if (
-                    (event.ctrlKey || event.metaKey) &&
-                    key === "v"
-                ) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    showMessage();
-                    return;
-                }
-
-                // 일부 브라우저에서 Shift + Insert로 붙여넣기 가능
-                if (
-                    event.shiftKey &&
-                    event.key === "Insert"
-                ) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    showMessage();
-                }
-            }
-
-            function blockContextMenu(event) {
-
-                event.preventDefault();
-                event.stopPropagation();
-                showMessage();
-            }
-
-            function applyProtection() {
-
-                document
-                    .querySelectorAll("textarea")
-                    .forEach(function(textarea) {
-
-                        if (!isTargetTextArea(textarea)) {
-                            return;
-                        }
-
-                        if (
-                            textarea.dataset.readingPasteBlocked === "true"
-                        ) {
-                            return;
-                        }
-
-                        textarea.dataset.readingPasteBlocked = "true";
-
-                        textarea.addEventListener(
-                            "paste",
-                            blockPaste,
-                            true
-                        );
-
-                        textarea.addEventListener(
-                            "beforeinput",
-                            blockBeforeInput,
-                            true
-                        );
-
-                        textarea.addEventListener(
-                            "keydown",
-                            blockKeyboardPaste,
-                            true
-                        );
-
-                        textarea.addEventListener(
-                            "contextmenu",
-                            blockContextMenu,
-                            true
-                        );
-                    });
-            }
-
-            // 최초 실행
-            applyProtection();
-
-            // Streamlit이 화면을 다시 그릴 때도 다시 적용
-            const observer = new MutationObserver(
-                function() {
-                    applyProtection();
-                }
-            );
-
-            observer.observe(
-                document.body,
-                {
-                    childList: true,
-                    subtree: true
-                }
-            );
-
-        })();
-        </script>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-# ============================================================
 # 6. AI 평가 함수
 # ============================================================
 
 def run_ai_evaluation(student_name, book_records):
 
-    client = get_openai_client()
-
-    if client is None:
-        raise Exception(
-            "OPENAI_API_KEY가 Streamlit Secrets에 없습니다."
-        )
+    client = get_gemini_client()
 
     # --------------------------------------------------------
     # 학생의 누적 기록을 AI가 읽을 수 있는 형태로 변환
@@ -574,7 +539,7 @@ def run_ai_evaluation(student_name, book_records):
 """
 
     # --------------------------------------------------------
-    # AI에게 줄 지시
+    # Gemini에게 줄 지시
     # --------------------------------------------------------
 
     system_prompt = f"""
@@ -609,48 +574,41 @@ def run_ai_evaluation(student_name, book_records):
 
 위 자료를 바탕으로 1~3번 영역을 평가하라.
 
-반드시 JSON 형식으로만 답하라.
-
-평가 결과에는 다음 항목을 포함한다.
-
-- 내용이해_점수
-- 작성충실도_점수
-- 감상의깊이_점수
-- 내용이해_근거
-- 작성충실도_근거
-- 감상의깊이_근거
-- 종합피드백
+각 영역은 반드시 10, 15, 20, 25 중 하나의 점수를 선택하라.
 
 종합피드백은 학생에게 직접 말하는 것이 아니라
 교사가 평가 결과를 참고할 수 있는 형태로 작성한다.
 """
 
+    # Gemini 구조화 출력용 JSON Schema
+    # Google 공식 Gemini API는 response_mime_type과
+    # response_schema를 사용해 JSON 형식 출력을 지원합니다.
     schema = {
-        "type": "object",
+        "type": "OBJECT",
         "properties": {
             "내용이해_점수": {
-                "type": "integer",
-                "enum": [10, 15, 20, 25]
+                "type": "STRING",
+                "enum": ["10", "15", "20", "25"]
             },
             "작성충실도_점수": {
-                "type": "integer",
-                "enum": [10, 15, 20, 25]
+                "type": "STRING",
+                "enum": ["10", "15", "20", "25"]
             },
             "감상의깊이_점수": {
-                "type": "integer",
-                "enum": [10, 15, 20, 25]
+                "type": "STRING",
+                "enum": ["10", "15", "20", "25"]
             },
             "내용이해_근거": {
-                "type": "string"
+                "type": "STRING"
             },
             "작성충실도_근거": {
-                "type": "string"
+                "type": "STRING"
             },
             "감상의깊이_근거": {
-                "type": "string"
+                "type": "STRING"
             },
             "종합피드백": {
-                "type": "string"
+                "type": "STRING"
             }
         },
         "required": [
@@ -661,33 +619,90 @@ def run_ai_evaluation(student_name, book_records):
             "작성충실도_근거",
             "감상의깊이_근거",
             "종합피드백"
-        ],
-        "additionalProperties": False
+        ]
     }
 
-    response = client.responses.create(
-        model=OPENAI_MODEL,
-        input=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_prompt
-            }
-        ],
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": "portfolio_evaluation",
-                "strict": True,
-                "schema": schema
-            }
-        }
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=schema
     )
 
-    result = json.loads(response.output_text)
+    contents = [
+        system_prompt,
+        user_prompt
+    ]
+
+    def generate_with_retry(model_name, attempts=4):
+        last_error = None
+
+        for attempt in range(attempts):
+            try:
+                return client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config
+                )
+
+            except Exception as e:
+                last_error = e
+                error_text = str(e)
+
+                # 503 UNAVAILABLE처럼 일시적인 서버 과부하만 재시도
+                is_retryable = (
+                    "503" in error_text
+                    or "UNAVAILABLE" in error_text
+                    or "service_unavailable" in error_text
+                )
+
+                if not is_retryable or attempt >= attempts - 1:
+                    raise
+
+                # 3초 → 6초 → 12초로 대기 시간을 늘림
+                delay = 3 * (2 ** attempt)
+                time.sleep(delay)
+
+        raise last_error
+
+    try:
+        # 우선 Gemini 3.6 Flash로 시도
+        response = generate_with_retry(GEMINI_MODEL)
+
+    except Exception as primary_error:
+        primary_text = str(primary_error)
+
+        # 3.6 Flash가 일시적으로 503이면 3.5 Flash-Lite로 한 번 전환
+        if (
+            "503" in primary_text
+            or "UNAVAILABLE" in primary_text
+            or "service_unavailable" in primary_text
+        ):
+            response = generate_with_retry(
+                GEMINI_FALLBACK_MODEL,
+                attempts=2
+            )
+        else:
+            raise
+
+    if not response.text:
+        raise Exception(
+            "Gemini가 빈 응답을 반환했습니다."
+        )
+
+    result = json.loads(response.text)
+
+    # 구조화 출력이더라도 애플리케이션에서 한 번 더 검증
+    allowed_scores = {10, 15, 20, 25}
+
+    for key in [
+        "내용이해_점수",
+        "작성충실도_점수",
+        "감상의깊이_점수"
+    ]:
+        if int(result[key]) not in allowed_scores:
+            raise Exception(
+                f"Gemini 평가 점수가 올바르지 않습니다: {result[key]}"
+            )
+        result[key] = int(result[key])
 
     return result
 
@@ -866,7 +881,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                     )
 
                     df_std = pd.DataFrame(
-                        ws_std.get_all_records()
+                        read_sheet_records("student_list")
                     )
 
                     user_match = df_std[
@@ -955,7 +970,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
             )
 
             df_dates = pd.DataFrame(
-                ws_dates.get_all_records()
+                read_sheet_records("allowed_class_dates")
             )
 
             grade_col = (
@@ -1047,14 +1062,12 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                     summary = st.text_area(
                         "1. 오늘 읽은 내용 짧은 요약 "
                         "(핵심 줄거리) *",
-                        height=110,
-                        key="reading_summary"
+                        height=110
                     )
 
                     quote = st.text_area(
                         "2. 가장 인상 깊은 문장과 이유",
-                        height=90,
-                        key="reading_quote"
+                        height=90
                     )
 
                     st.markdown(
@@ -1068,8 +1081,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         question_text = st.text_area(
                             "3-1. 나의 질문",
                             height=100,
-                            placeholder="예: 주인공은 왜 그런 선택을 했을까?",
-                            key="reading_question"
+                            placeholder="예: 주인공은 왜 그런 선택을 했을까?"
                         )
 
                     with col_q2:
@@ -1077,20 +1089,14 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         answer_text = st.text_area(
                             "3-2. 질문에 대한 나의 생각/답변",
                             height=100,
-                            placeholder="예: 자신의 가치관을 지키기 위해서였을 것이다.",
-                            key="reading_answer"
+                            placeholder="예: 자신의 가치관을 지키기 위해서였을 것이다."
                         )
 
                     reflection = st.text_area(
                         "4. 나의 생각과 느낌 "
                         "(느낀점/깨달은점) *",
-                        height=130,
-                        key="reading_reflection"
+                        height=130
                     )
-
-                    # 위 5개 독서 기록 입력창에만 붙여넣기 차단 적용
-                    # 책 제목 / 작가 / 페이지 범위는 붙여넣기 가능
-                    block_reading_paste()
 
                     submit_btn = st.form_submit_button(
                         "🚀 독서 기록 제출하기",
@@ -1137,6 +1143,8 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                                 ]
                             )
 
+                            st.cache_data.clear()
+
                             st.balloons()
 
                             st.success(
@@ -1157,7 +1165,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                 )
 
                 df_logs = pd.DataFrame(
-                    ws_logs.get_all_records()
+                    read_sheet_records("reading_logs")
                 )
 
                 if not df_logs.empty:
@@ -1234,27 +1242,74 @@ else:
         unsafe_allow_html=True
     )
 
-    # --------------------------------------------------------
-    # 교사 비밀번호
+       # --------------------------------------------------------
+    # 교사 로그인
     # --------------------------------------------------------
 
-    teacher_pw = st.sidebar.text_input(
-        "교사 비밀번호 입력",
-        type="password"
-    )
+    if "teacher_logged_in" not in st.session_state:
 
-    if teacher_pw != "0923":
+        st.session_state["teacher_logged_in"] = False
+
+
+    # ========================================================
+    # 아직 로그인하지 않은 경우
+    # ========================================================
+
+    if not st.session_state["teacher_logged_in"]:
+
+        with st.sidebar.form("teacher_login_form"):
+
+            st.markdown("### 🔐 교사 로그인")
+
+            teacher_pw = st.text_input(
+                "교사용 비밀번호",
+                type="password"
+            )
+
+            teacher_login_btn = st.form_submit_button(
+                "확인",
+                use_container_width=True
+            )
+
+
+        if teacher_login_btn:
+
+            if teacher_pw == "0923":
+
+                st.session_state["teacher_logged_in"] = True
+
+                st.rerun()
+
+            else:
+
+                st.error(
+                    "❌ 비밀번호가 올바르지 않습니다."
+                )
 
         st.info(
-            "🔐 교사용 화면을 이용하려면 "
+            "교사용 화면을 이용하려면 "
             "교사 비밀번호를 입력해 주세요."
         )
 
         st.stop()
 
-    st.success(
-        "교사 인증이 완료되었습니다."
+
+    # ========================================================
+    # 로그인된 경우
+    # ========================================================
+
+    st.sidebar.success("✅ 교사 로그인 상태")
+
+    teacher_logout_btn = st.sidebar.button(
+        "🚪 로그아웃",
+        use_container_width=True
     )
+
+    if teacher_logout_btn:
+
+        st.session_state["teacher_logged_in"] = False
+
+        st.rerun()
 
     # --------------------------------------------------------
     # 데이터 불러오기
@@ -1267,7 +1322,7 @@ else:
         )
 
         df_logs = pd.DataFrame(
-            ws_logs.get_all_records()
+            read_sheet_records("reading_logs")
         )
 
         ws_std = get_worksheet(
@@ -1275,12 +1330,12 @@ else:
         )
 
         df_std = pd.DataFrame(
-            ws_std.get_all_records()
+            read_sheet_records("student_list")
         )
 
         ws_scores = ensure_score_sheet()
 
-        score_records = ws_scores.get_all_records()
+        score_records = read_sheet_records("portfolio_scores")
 
         if score_records:
 
@@ -1293,6 +1348,12 @@ else:
             df_scores = pd.DataFrame(
                 columns=SCORE_HEADERS
             )
+
+        # portfolio_scores의 실제 열 구조가 조금 달라도
+        # 항상 SCORE_HEADERS에 맞춰서 사용합니다.
+        df_scores = normalize_score_dataframe(
+            df_scores
+        )
 
     except Exception as e:
 
@@ -1435,6 +1496,163 @@ else:
             class_options
         )
 
+
+    # ========================================================
+    # 선택한 학급 통계
+    # ========================================================
+
+    if selected_grade != "전체" and selected_class != "전체":
+
+        st.markdown("### 📊 학급 통계")
+
+        # 선택한 학급의 학생
+        class_students = df_std[
+            (df_std["학년"].astype(str) == str(selected_grade)) &
+            (df_std["반"].astype(str) == str(selected_class))
+        ].copy()
+
+        student_count = len(class_students)
+
+
+        # ----------------------------------------------------
+        # 1. 평균 작성 차시
+        # ----------------------------------------------------
+
+        avg_logs = 0.0
+
+        if not df_logs.empty and student_count > 0:
+
+            class_logs = df_logs[
+                (df_logs["학년"].astype(str) == str(selected_grade)) &
+                (df_logs["반"].astype(str) == str(selected_class))
+            ].copy()
+
+            if not class_logs.empty:
+
+                log_count = (
+                    class_logs
+                    .groupby(class_logs["번호"].astype(str))
+                    .size()
+                )
+
+                student_ids = (
+                    class_students["번호"]
+                    .astype(str)
+                    .drop_duplicates()
+                    .tolist()
+                )
+
+                log_count = log_count.reindex(
+                    student_ids,
+                    fill_value=0
+                )
+
+                avg_logs = round(
+                    log_count.mean(),
+                    1
+                )
+
+
+        # ----------------------------------------------------
+        # 2. 채점 완료율
+        # ----------------------------------------------------
+
+        scored_students = 0
+
+        if not df_scores.empty and student_count > 0:
+
+            class_scores = df_scores[
+                (df_scores["학년"].astype(str) == str(selected_grade)) &
+                (df_scores["반"].astype(str) == str(selected_class))
+            ].copy()
+
+            if not class_scores.empty:
+
+                class_scores["최종점수_숫자"] = pd.to_numeric(
+                    class_scores["최종점수"],
+                    errors="coerce"
+                )
+
+                scored_students = (
+                    class_scores[
+                        class_scores["최종점수_숫자"].notna()
+                    ]["번호"]
+                    .astype(str)
+                    .nunique()
+                )
+
+        complete_rate = 0.0
+
+        if student_count > 0:
+
+            complete_rate = round(
+                scored_students / student_count * 100,
+                1
+            )
+
+
+        # ----------------------------------------------------
+        # 3. 평균 점수
+        # ----------------------------------------------------
+
+        avg_score = 0.0
+
+        if not df_scores.empty:
+
+            class_scores = df_scores[
+                (df_scores["학년"].astype(str) == str(selected_grade)) &
+                (df_scores["반"].astype(str) == str(selected_class))
+            ].copy()
+
+            if not class_scores.empty:
+
+                class_scores["최종점수_숫자"] = pd.to_numeric(
+                    class_scores["최종점수"],
+                    errors="coerce"
+                )
+
+                scored_scores = class_scores[
+                    class_scores["최종점수_숫자"].notna()
+                ]
+
+                if not scored_scores.empty:
+
+                    avg_score = round(
+                        scored_scores["최종점수_숫자"].mean(),
+                        1
+                    )
+
+
+        # ----------------------------------------------------
+        # 통계 표시
+        # ----------------------------------------------------
+
+        stat1, stat2, stat3 = st.columns(3)
+
+        with stat1:
+
+            st.metric(
+                "평균 작성 차시",
+                f"{avg_logs}차시"
+            )
+
+        with stat2:
+
+            st.metric(
+                "채점 완료율",
+                f"{complete_rate}%"
+            )
+
+        with stat3:
+
+            st.metric(
+                "평균 점수",
+                f"{avg_score}점"
+            )
+
+        st.divider()
+
+
     # --------------------------------------------------------
     # 학생
     # --------------------------------------------------------
@@ -1478,10 +1696,25 @@ else:
                     student_label
                 ] = row
 
+        saved_selected_student = st.session_state.get(
+            "selected_student_label",
+            "전체"
+        )
+
+        if saved_selected_student not in student_options:
+            saved_selected_student = "전체"
+
+        # 버튼으로 학생을 선택한 경우 selectbox의 값도 함께 변경
+        st.session_state["teacher_student_select"] = saved_selected_student
+
         selected_student = st.selectbox(
             "학생",
-            student_options
+            student_options,
+            key="teacher_student_select"
         )
+
+        # 드롭다운에서 학생을 직접 선택한 경우에도 상태를 유지
+        st.session_state["selected_student_label"] = selected_student
 
     # ========================================================
     # 학생 목록
@@ -1592,9 +1825,29 @@ else:
             )
 
             st.info(
-                "👆 위 목록에서 특정 학생을 선택하면 "
-                "누적 독서 기록과 AI 평가 화면이 나타납니다."
+                "👆 위 표의 행을 직접 클릭하는 기능은 Streamlit의 data_editor가 아니면 선택값으로 연결되지 않습니다. "
+                "아래에서 학생 이름 옆의 [학생 보기] 버튼을 누르거나, 위의 학생 선택 메뉴에서 학생을 선택하세요."
             )
+
+            # 표의 학생을 실제로 선택할 수 있도록 버튼 제공
+            for _, student_row in temp_students.iterrows():
+                _grade = safe_str(student_row["학년"])
+                _class = safe_str(student_row["반"])
+                _num = safe_str(student_row["번호"])
+                _name = safe_str(student_row["이름"])
+                _label = f"{_num}번 {_name}"
+
+                _c1, _c2 = st.columns([5, 1])
+                with _c1:
+                    st.write(f"**{_label}**  ·  {_grade}학년 {_class}반")
+                with _c2:
+                    if st.button(
+                        "학생 보기",
+                        key=f"view_student_{_grade}_{_class}_{_num}",
+                        use_container_width=True
+                    ):
+                        st.session_state["selected_student_label"] = _label
+                        st.rerun()
 
             st.stop()
 
@@ -1841,9 +2094,9 @@ else:
         ai_reason = ""
         ai_feedback = ""
 
-        teacher_understanding = automatic_count_score
-        teacher_completeness = automatic_count_score
-        teacher_depth = automatic_count_score
+        teacher_understanding = 10
+        teacher_completeness = 10
+        teacher_depth = 10
         teacher_count = automatic_count_score
         teacher_feedback = ""
 
@@ -2168,53 +2421,68 @@ else:
         )
 
         score_options = [
-            10,
-            15,
+            25,
             20,
-            25
+            15,
+            10
         ]
 
         # ----------------------------------------------------
-        # 교사 점수
+        # 교사 점수 - 버튼 선택 방식
         # ----------------------------------------------------
 
-        teacher_understanding = st.selectbox(
+        def score_button_selector(label, current_value, state_key):
+            """10/15/20/25점 중 하나를 버튼으로 선택합니다."""
+
+            if state_key not in st.session_state:
+                st.session_state[state_key] = (
+                    current_value
+                    if current_value in score_options
+                    else 10
+                )
+
+            st.markdown(f"**{label}**")
+
+            button_cols = st.columns(4)
+
+            for col, score in zip(button_cols, score_options):
+                with col:
+                    is_selected = (
+                        st.session_state[state_key] == score
+                    )
+
+                    if st.button(
+                        f"{'✓ ' if is_selected else ''}{score}점",
+                        key=f"{state_key}_{score}",
+                        use_container_width=True,
+                        type="primary" if is_selected else "secondary"
+                    ):
+                        st.session_state[state_key] = score
+
+            selected_score = st.session_state[state_key]
+
+            st.caption(
+                f"현재 선택: **{selected_score}점 / 25점**"
+            )
+
+            return selected_score
+
+        teacher_understanding = score_button_selector(
             "① 내용의 이해도",
-            score_options,
-            index=(
-                score_options.index(
-                    teacher_understanding
-                )
-                if teacher_understanding in score_options
-                else 0
-            ),
-            key=f"teacher_understanding_{evaluation_id}"
+            teacher_understanding,
+            f"teacher_understanding_{evaluation_id}"
         )
 
-        teacher_completeness = st.selectbox(
+        teacher_completeness = score_button_selector(
             "② 작성의 충실도",
-            score_options,
-            index=(
-                score_options.index(
-                    teacher_completeness
-                )
-                if teacher_completeness in score_options
-                else 0
-            ),
-            key=f"teacher_completeness_{evaluation_id}"
+            teacher_completeness,
+            f"teacher_completeness_{evaluation_id}"
         )
 
-        teacher_depth = st.selectbox(
+        teacher_depth = score_button_selector(
             "③ 감상의 깊이",
-            score_options,
-            index=(
-                score_options.index(
-                    teacher_depth
-                )
-                if teacher_depth in score_options
-                else 0
-            ),
-            key=f"teacher_depth_{evaluation_id}"
+            teacher_depth,
+            f"teacher_depth_{evaluation_id}"
         )
 
         # ----------------------------------------------------
@@ -2313,6 +2581,8 @@ else:
                     ai_feedback,
                     teacher_feedback
                 )
+
+                st.cache_data.clear()
 
                 st.success(
                     f"✅ {student_name} 학생의 "
