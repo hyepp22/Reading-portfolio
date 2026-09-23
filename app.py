@@ -1380,151 +1380,176 @@ else:
 
         class_options = ["전체"] + classes
 
-        selected_class = st.selectbox(
+                selected_class = st.selectbox(
             "반",
             class_options
         )
-# ===============================
-# 학급 통계
-# ===============================
 
-# 실제 반을 선택했을 때만 표시
-if selected_grade != "전체" and selected_class != "전체":
+    # ========================================================
+    # 선택한 학급 통계
+    # ========================================================
 
-    st.subheader("📊 학급 통계")
+    if selected_grade != "전체" and selected_class != "전체":
 
-    # 현재 선택된 학급 학생
-    class_students = df_std[
-        (df_std["학년"].astype(str) == str(selected_grade)) &
-        (df_std["반"].astype(str) == str(selected_class))
-    ]
+        st.markdown("### 📊 학급 통계")
 
-    student_count = len(class_students)
+        # ----------------------------------------------------
+        # 현재 선택된 학급의 학생 수
+        # ----------------------------------------------------
 
-    # =====================
-    # 평균 작성 차시
-    # =====================
-
-    if not df_logs.empty:
-
-        class_logs = df_logs[
-            (df_logs["학년"].astype(str) == str(selected_grade)) &
-            (df_logs["반"].astype(str) == str(selected_class))
-        ]
-
-        # 학생별 작성 횟수
-        log_count = (
-            class_logs
-            .groupby("번호")
-            .size()
-        )
-
-        # 기록을 한 번도 작성하지 않은 학생도 0회로 포함
-        all_student_ids = class_students["번호"].astype(str)
-
-        log_count.index = log_count.index.astype(str)
-
-        log_count = log_count.reindex(
-            all_student_ids,
-            fill_value=0
-        )
-
-        avg_logs = round(
-            log_count.mean(),
-            1
-        )
-
-    else:
-        avg_logs = 0
-
-    # =====================
-    # 채점 완료율
-    # =====================
-
-    if not df_scores.empty:
-
-        class_scores = df_scores[
-            (df_scores["학년"].astype(str) == str(selected_grade)) &
-            (df_scores["반"].astype(str) == str(selected_class))
+        class_students = df_std[
+            (df_std["학년"].astype(str) == str(selected_grade)) &
+            (df_std["반"].astype(str) == str(selected_class))
         ].copy()
 
-        # 최종점수가 실제로 입력된 학생만 채점 완료
-        class_scores["최종점수_숫자"] = pd.to_numeric(
-            class_scores["최종점수"],
-            errors="coerce"
-        )
+        student_count = len(class_students)
 
-        scored_students = class_scores[
-            class_scores["최종점수_숫자"].notna()
-        ]["번호"].astype(str).nunique()
+        # ----------------------------------------------------
+        # 1. 평균 작성 차시
+        # ----------------------------------------------------
 
-    else:
+        if not df_logs.empty and student_count > 0:
+
+            class_logs = df_logs[
+                (df_logs["학년"].astype(str) == str(selected_grade)) &
+                (df_logs["반"].astype(str) == str(selected_class))
+            ].copy()
+
+            if not class_logs.empty:
+
+                # 학생별 독서 기록 횟수
+                log_count = (
+                    class_logs
+                    .groupby(
+                        class_logs["번호"].astype(str)
+                    )
+                    .size()
+                )
+
+                # 학급 전체 학생을 기준으로 계산
+                # → 한 번도 작성하지 않은 학생도 0회로 포함
+                student_ids = (
+                    class_students["번호"]
+                    .astype(str)
+                    .tolist()
+                )
+
+                log_count = log_count.reindex(
+                    student_ids,
+                    fill_value=0
+                )
+
+                avg_logs = round(
+                    log_count.mean(),
+                    1
+                )
+
+            else:
+                avg_logs = 0.0
+
+        else:
+            avg_logs = 0.0
+
+        # ----------------------------------------------------
+        # 2. 채점 완료율
+        # ----------------------------------------------------
+
         scored_students = 0
 
-    if student_count > 0:
-        complete_rate = round(
-            scored_students / student_count * 100,
-            1
-        )
-    else:
-        complete_rate = 0
+        if not df_scores.empty and student_count > 0:
 
-    # =====================
-    # 평균 점수
-    # =====================
+            class_scores = df_scores[
+                (df_scores["학년"].astype(str) == str(selected_grade)) &
+                (df_scores["반"].astype(str) == str(selected_class))
+            ].copy()
 
-    if not df_scores.empty:
+            if not class_scores.empty:
 
-        class_scores = df_scores[
-            (df_scores["학년"].astype(str) == str(selected_grade)) &
-            (df_scores["반"].astype(str) == str(selected_class))
-        ].copy()
+                # 최종점수가 실제로 입력된 평가만 완료로 처리
+                class_scores["최종점수_숫자"] = pd.to_numeric(
+                    class_scores["최종점수"],
+                    errors="coerce"
+                )
 
-        class_scores["최종점수"] = pd.to_numeric(
-            class_scores["최종점수"],
-            errors="coerce"
-        )
+                scored_students = (
+                    class_scores[
+                        class_scores["최종점수_숫자"].notna()
+                    ]["번호"]
+                    .astype(str)
+                    .nunique()
+                )
 
-        scored_scores = class_scores[
-            class_scores["최종점수"].notna()
-        ]
+        if student_count > 0:
 
-        if not scored_scores.empty:
-            avg_score = round(
-                scored_scores["최종점수"].mean(),
+            complete_rate = round(
+                scored_students / student_count * 100,
                 1
             )
+
         else:
-            avg_score = 0
 
-    else:
-        avg_score = 0
+            complete_rate = 0.0
 
-    # =====================
-    # 화면 표시
-    # =====================
+        # ----------------------------------------------------
+        # 3. 평균 점수
+        # ----------------------------------------------------
 
-    col1, col2, col3 = st.columns(3)
+        avg_score = 0.0
 
-    with col1:
-        st.metric(
-            "평균 작성 차시",
-            f"{avg_logs}차시"
-        )
+        if not df_scores.empty:
 
-    with col2:
-        st.metric(
-            "채점 완료율",
-            f"{complete_rate}%"
-        )
+            class_scores = df_scores[
+                (df_scores["학년"].astype(str) == str(selected_grade)) &
+                (df_scores["반"].astype(str) == str(selected_class))
+            ].copy()
 
-    with col3:
-        st.metric(
-            "평균 점수",
-            f"{avg_score}점"
-        )
+            if not class_scores.empty:
 
-    st.divider()
+                class_scores["최종점수"] = pd.to_numeric(
+                    class_scores["최종점수"],
+                    errors="coerce"
+                )
+
+                scored_scores = class_scores[
+                    class_scores["최종점수"].notna()
+                ]
+
+                if not scored_scores.empty:
+
+                    avg_score = round(
+                        scored_scores["최종점수"].mean(),
+                        1
+                    )
+
+        # ----------------------------------------------------
+        # 통계 표시
+        # ----------------------------------------------------
+
+        stat1, stat2, stat3 = st.columns(3)
+
+        with stat1:
+
+            st.metric(
+                "평균 작성 차시",
+                f"{avg_logs}차시"
+            )
+
+        with stat2:
+
+            st.metric(
+                "채점 완료율",
+                f"{complete_rate}%"
+            )
+
+        with stat3:
+
+            st.metric(
+                "평균 점수",
+                f"{avg_score}점"
+            )
+
+        st.divider()
+
     # --------------------------------------------------------
     # 학생
     # --------------------------------------------------------
