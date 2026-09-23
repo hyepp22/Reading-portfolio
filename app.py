@@ -432,6 +432,34 @@ st.markdown(
 # 5. 공통 함수
 # ============================================================
 
+def update_reading_log(ws, sheet_row, book_title, author, pages_read, summary, quote, question_text, answer_text, reflection):
+    """reading_logs 시트의 학생 입력 내용을 수정합니다.
+
+    A~D(학생 정보)와 G(기록 날짜), N(제출 시각)은 유지하고
+    E~M의 독서 기록 내용만 수정합니다.
+    """
+    ws.update(
+        f"E{sheet_row}:M{sheet_row}",
+        [[
+            book_title,
+            author,
+            safe_str(ws.cell(sheet_row, 7).value),
+            pages_read,
+            summary,
+            quote,
+            question_text,
+            answer_text,
+            reflection
+        ]],
+        value_input_option="USER_ENTERED"
+    )
+
+
+def delete_reading_log(ws, sheet_row):
+    """reading_logs 시트에서 지정한 기록 한 줄을 삭제합니다."""
+    ws.delete_rows(sheet_row)
+
+
 def safe_str(value):
     """빈칸/NaN을 안전하게 문자열로 변환"""
     if pd.isna(value):
@@ -1409,37 +1437,282 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
 
                     else:
 
-                        for _, row in my_logs.iterrows():
+                        st.caption(
+                            "잘못 입력한 내용은 수정하거나 삭제할 수 있습니다. "
+                            "수정 후에는 저장된 기록에도 바로 반영됩니다."
+                        )
+
+                        editing_row = st.session_state.get(
+                            "editing_reading_log_row"
+                        )
+                        deleting_row = st.session_state.get(
+                            "deleting_reading_log_row"
+                        )
+
+                        for row_index, row in my_logs.iterrows():
+
+                            # DataFrame의 실제 인덱스는 헤더를 제외한
+                            # Google Sheets 데이터 행과 대응하므로 +2를 합니다.
+                            sheet_row = int(row_index) + 2
+
+                            log_date = safe_str(row.get("날짜"))
+                            book_title = safe_str(row.get("책 제목"))
+                            pages_read = safe_str(row.get("읽은 페이지"))
 
                             with st.expander(
-                                f"📌 [{row['날짜']}] "
-                                f"{row['책 제목']} "
-                                f"({row['읽은 페이지']})"
+                                f"📌 [{log_date}] "
+                                f"{book_title} "
+                                f"({pages_read})",
+                                expanded=(
+                                    sheet_row == editing_row
+                                    or sheet_row == deleting_row
+                                )
                             ):
 
+                                # ------------------------------
+                                # 삭제 확인 화면
+                                # ------------------------------
+                                if sheet_row == deleting_row:
+
+                                    st.warning(
+                                        "⚠️ 이 독서 기록을 정말 삭제할까요? "
+                                        "삭제하면 다시 복구하기 어렵습니다."
+                                    )
+
+                                    dc1, dc2 = st.columns(2)
+
+                                    with dc1:
+                                        if st.button(
+                                            "🗑️ 삭제하기",
+                                            type="primary",
+                                            use_container_width=True,
+                                            key=f"confirm_delete_{sheet_row}"
+                                        ):
+                                            try:
+                                                delete_reading_log(
+                                                    ws_logs,
+                                                    sheet_row
+                                                )
+
+                                                st.cache_data.clear()
+                                                st.session_state.pop(
+                                                    "deleting_reading_log_row",
+                                                    None
+                                                )
+                                                st.session_state.pop(
+                                                    "editing_reading_log_row",
+                                                    None
+                                                )
+
+                                                st.success(
+                                                    "✅ 독서 기록이 삭제되었습니다."
+                                                )
+                                                st.rerun()
+
+                                            except Exception as e:
+                                                st.error(
+                                                    f"기록 삭제 중 오류가 발생했습니다: {e}"
+                                                )
+
+                                    with dc2:
+                                        if st.button(
+                                            "취소",
+                                            use_container_width=True,
+                                            key=f"cancel_delete_{sheet_row}"
+                                        ):
+                                            st.session_state.pop(
+                                                "deleting_reading_log_row",
+                                                None
+                                            )
+                                            st.rerun()
+
+                                    continue
+
+                                # ------------------------------
+                                # 수정 화면
+                                # ------------------------------
+                                if sheet_row == editing_row:
+
+                                    st.info(
+                                        "✏️ 잘못 입력한 내용을 수정한 뒤 "
+                                        "‘수정 내용 저장’을 눌러 주세요."
+                                    )
+
+                                    edit_book_title = st.text_input(
+                                        "책 제목 *",
+                                        value=book_title,
+                                        key=f"edit_book_title_{sheet_row}"
+                                    )
+
+                                    edit_author = st.text_input(
+                                        "작가 이름",
+                                        value=safe_str(row.get("작가")),
+                                        key=f"edit_author_{sheet_row}"
+                                    )
+
+                                    edit_pages = st.text_input(
+                                        "읽은 페이지 범위 *",
+                                        value=pages_read,
+                                        key=f"edit_pages_{sheet_row}"
+                                    )
+
+                                    edit_summary = st.text_area(
+                                        "1. 오늘 읽은 내용 짧은 요약 *",
+                                        value=safe_str(row.get("요약")),
+                                        height=120,
+                                        key=f"edit_summary_{sheet_row}"
+                                    )
+
+                                    edit_quote = st.text_area(
+                                        "2. 가장 인상 깊은 문장과 이유",
+                                        value=safe_str(row.get("인상깊은 내용")),
+                                        height=100,
+                                        key=f"edit_quote_{sheet_row}"
+                                    )
+
+                                    edit_question = st.text_area(
+                                        "3-1. 나의 질문",
+                                        value=safe_str(row.get("질문")),
+                                        height=100,
+                                        key=f"edit_question_{sheet_row}"
+                                    )
+
+                                    edit_answer = st.text_area(
+                                        "3-2. 질문에 대한 나의 생각/답변",
+                                        value=safe_str(row.get("답변")),
+                                        height=100,
+                                        key=f"edit_answer_{sheet_row}"
+                                    )
+
+                                    edit_reflection = st.text_area(
+                                        "4. 나의 생각과 느낌 *",
+                                        value=safe_str(row.get("느낀점")),
+                                        height=130,
+                                        key=f"edit_reflection_{sheet_row}"
+                                    )
+
+                                    ec1, ec2 = st.columns(2)
+
+                                    with ec1:
+                                        if st.button(
+                                            "💾 수정 내용 저장",
+                                            type="primary",
+                                            use_container_width=True,
+                                            key=f"save_edit_{sheet_row}"
+                                        ):
+
+                                            if (
+                                                not edit_book_title.strip()
+                                                or not edit_pages.strip()
+                                                or not edit_summary.strip()
+                                                or not edit_reflection.strip()
+                                            ):
+                                                st.error(
+                                                    "필수 항목(*)을 빠짐없이 입력해 주세요."
+                                                )
+                                            else:
+                                                try:
+                                                    update_reading_log(
+                                                        ws_logs,
+                                                        sheet_row,
+                                                        edit_book_title.strip(),
+                                                        edit_author.strip(),
+                                                        edit_pages.strip(),
+                                                        edit_summary.strip(),
+                                                        edit_quote.strip(),
+                                                        edit_question.strip(),
+                                                        edit_answer.strip(),
+                                                        edit_reflection.strip()
+                                                    )
+
+                                                    st.cache_data.clear()
+                                                    st.session_state.pop(
+                                                        "editing_reading_log_row",
+                                                        None
+                                                    )
+
+                                                    st.success(
+                                                        "✅ 독서 기록이 수정되었습니다."
+                                                    )
+                                                    st.rerun()
+
+                                                except Exception as e:
+                                                    st.error(
+                                                        f"기록 수정 중 오류가 발생했습니다: {e}"
+                                                    )
+
+                                    with ec2:
+                                        if st.button(
+                                            "취소",
+                                            use_container_width=True,
+                                            key=f"cancel_edit_{sheet_row}"
+                                        ):
+                                            st.session_state.pop(
+                                                "editing_reading_log_row",
+                                                None
+                                            )
+                                            st.rerun()
+
+                                    continue
+
+                                # ------------------------------
+                                # 일반 조회 화면
+                                # ------------------------------
+                                ac1, ac2 = st.columns(2)
+
+                                with ac1:
+                                    if st.button(
+                                        "✏️ 수정",
+                                        use_container_width=True,
+                                        key=f"edit_log_{sheet_row}"
+                                    ):
+                                        st.session_state[
+                                            "editing_reading_log_row"
+                                        ] = sheet_row
+                                        st.session_state.pop(
+                                            "deleting_reading_log_row",
+                                            None
+                                        )
+                                        st.rerun()
+
+                                with ac2:
+                                    if st.button(
+                                        "🗑️ 삭제",
+                                        use_container_width=True,
+                                        key=f"delete_log_{sheet_row}"
+                                    ):
+                                        st.session_state[
+                                            "deleting_reading_log_row"
+                                        ] = sheet_row
+                                        st.session_state.pop(
+                                            "editing_reading_log_row",
+                                            None
+                                        )
+                                        st.rerun()
+
                                 st.write(
-                                    f"**작가:** {row['작가']}"
+                                    f"**작가:** {safe_str(row.get('작가'))}"
                                 )
 
                                 st.write(
-                                    f"**줄거리 요약:** {row['요약']}"
+                                    f"**줄거리 요약:** {safe_str(row.get('요약'))}"
                                 )
 
                                 st.write(
                                     f"**인상 깊은 내용:** "
-                                    f"{row['인상깊은 내용']}"
+                                    f"{safe_str(row.get('인상깊은 내용'))}"
                                 )
 
                                 st.write(
-                                    f"**질문:** {row['질문']}"
+                                    f"**질문:** {safe_str(row.get('질문'))}"
                                 )
 
                                 st.write(
-                                    f"**답변:** {row['답변']}"
+                                    f"**답변:** {safe_str(row.get('답변'))}"
                                 )
 
                                 st.write(
-                                    f"**느낀점:** {row['느낀점']}"
+                                    f"**느낀점:** {safe_str(row.get('느낀점'))}"
                                 )
 
             except Exception as e:
