@@ -81,8 +81,14 @@ def disable_paste():
 SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
 # AI 평가에 사용할 모델
-GEMINI_MODEL = "gemini-3.6-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
+# 학습지 사진 OCR 전용 모델. 503(일시적 과부하) 발생 시 순서대로 전환합니다.
+OCR_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash"
+]
 
 # portfolio_scores 시트의 열 이름
 SCORE_HEADERS = [
@@ -196,6 +202,8 @@ def run_worksheet_ocr(uploaded_files):
     """
     종이 독서 학습지 사진을 Gemini Vision으로 읽어
     현재 학생 입력 화면의 각 항목에 맞는 구조화된 결과를 반환합니다.
+
+    503 UNAVAILABLE가 발생하면 OCR 전용 모델을 순서대로 바꾸어 재시도합니다.
     """
 
     if not uploaded_files:
@@ -275,40 +283,73 @@ def run_worksheet_ocr(uploaded_files):
             )
         )
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=contents,
-        config=config
+    def is_retryable_503(error):
+        error_text = str(error).upper()
+        return (
+            "503" in error_text
+            or "UNAVAILABLE" in error_text
+            or "SERVICE_UNAVAILABLE" in error_text
+        )
+
+    last_error = None
+
+    # 모델별로 최대 3회까지 지수 백오프 후 다음 모델로 넘어갑니다.
+    # 사진 OCR은 일시적인 503이 발생할 수 있으므로 한 모델에서 계속 붙잡지 않습니다.
+    for model_name in OCR_MODELS:
+
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config
+                )
+
+                if not response.text:
+                    raise Exception("Gemini가 빈 응답을 반환했습니다.")
+
+                result = json.loads(response.text)
+
+                # 학습지의 '구절'과 '까닭'을 기존 웹앱의 하나의 입력창으로 합칩니다.
+                quote = str(result.get("quote", "")).strip()
+                quote_reason = str(result.get("quote_reason", "")).strip()
+
+                if quote and quote_reason:
+                    combined_quote = f"구절(장면): {quote}\n\n까닭: {quote_reason}"
+                elif quote:
+                    combined_quote = f"구절(장면): {quote}"
+                elif quote_reason:
+                    combined_quote = f"까닭: {quote_reason}"
+                else:
+                    combined_quote = ""
+
+                return {
+                    "book_title": str(result.get("book_title", "")).strip(),
+                    "author": str(result.get("author", "")).strip(),
+                    "pages_read": str(result.get("pages_read", "")).strip(),
+                    "summary": str(result.get("summary", "")).strip(),
+                    "quote": combined_quote,
+                    "question": str(result.get("question", "")).strip(),
+                    "answer": str(result.get("answer", "")).strip(),
+                    "reflection": str(result.get("reflection", "")).strip()
+                }
+
+            except Exception as e:
+                last_error = e
+
+                if not is_retryable_503(e):
+                    raise
+
+                # 같은 모델에서 계속 503이면 잠시 기다린 뒤 재시도합니다.
+                # 마지막 시도 후에는 다음 모델로 넘어갑니다.
+                if attempt < 2:
+                    time.sleep(2 ** attempt * 2)  # 2초 → 4초
+
+    raise Exception(
+        "Gemini 서버가 현재 매우 혼잡하여 학습지 OCR을 처리하지 못했습니다. "
+        "잠시 후 다시 시도해 주세요. "
+        f"(마지막 오류: {last_error})"
     )
-
-    if not response.text:
-        raise Exception("사진에서 읽어 낸 내용이 없습니다.")
-
-    result = json.loads(response.text)
-
-    # 학습지의 '구절'과 '까닭'을 기존 웹앱의 하나의 입력창으로 합칩니다.
-    quote = str(result.get("quote", "")).strip()
-    quote_reason = str(result.get("quote_reason", "")).strip()
-
-    if quote and quote_reason:
-        combined_quote = f"구절(장면): {quote}\n\n까닭: {quote_reason}"
-    elif quote:
-        combined_quote = f"구절(장면): {quote}"
-    elif quote_reason:
-        combined_quote = f"까닭: {quote_reason}"
-    else:
-        combined_quote = ""
-
-    return {
-        "book_title": str(result.get("book_title", "")).strip(),
-        "author": str(result.get("author", "")).strip(),
-        "pages_read": str(result.get("pages_read", "")).strip(),
-        "summary": str(result.get("summary", "")).strip(),
-        "quote": combined_quote,
-        "question": str(result.get("question", "")).strip(),
-        "answer": str(result.get("answer", "")).strip(),
-        "reflection": str(result.get("reflection", "")).strip()
-    }
 
 
 # ============================================================
