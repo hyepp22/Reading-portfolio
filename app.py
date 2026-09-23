@@ -1178,27 +1178,74 @@ else:
         unsafe_allow_html=True
     )
 
-    # --------------------------------------------------------
-    # 교사 비밀번호
+       # --------------------------------------------------------
+    # 교사 로그인
     # --------------------------------------------------------
 
-    teacher_pw = st.sidebar.text_input(
-        "교사 비밀번호 입력",
-        type="password"
-    )
+    if "teacher_logged_in" not in st.session_state:
 
-    if teacher_pw != "0923":
+        st.session_state["teacher_logged_in"] = False
+
+
+    # ========================================================
+    # 아직 로그인하지 않은 경우
+    # ========================================================
+
+    if not st.session_state["teacher_logged_in"]:
+
+        with st.sidebar.form("teacher_login_form"):
+
+            st.markdown("### 🔐 교사 로그인")
+
+            teacher_pw = st.text_input(
+                "교사용 비밀번호",
+                type="password"
+            )
+
+            teacher_login_btn = st.form_submit_button(
+                "확인",
+                use_container_width=True
+            )
+
+
+        if teacher_login_btn:
+
+            if teacher_pw == "0923":
+
+                st.session_state["teacher_logged_in"] = True
+
+                st.rerun()
+
+            else:
+
+                st.error(
+                    "❌ 비밀번호가 올바르지 않습니다."
+                )
 
         st.info(
-            "🔐 교사용 화면을 이용하려면 "
+            "교사용 화면을 이용하려면 "
             "교사 비밀번호를 입력해 주세요."
         )
 
         st.stop()
 
-    st.success(
-        "교사 인증이 완료되었습니다."
+
+    # ========================================================
+    # 로그인된 경우
+    # ========================================================
+
+    st.sidebar.success("✅ 교사 로그인 상태")
+
+    teacher_logout_btn = st.sidebar.button(
+        "🚪 로그아웃",
+        use_container_width=True
     )
+
+    if teacher_logout_btn:
+
+        st.session_state["teacher_logged_in"] = False
+
+        st.rerun()
 
     # --------------------------------------------------------
     # 데이터 불러오기
