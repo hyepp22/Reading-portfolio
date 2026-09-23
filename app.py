@@ -9,6 +9,70 @@ from google.oauth2.service_account import Credentials
 from google import genai
 from google.genai import types
 
+# ============================================================
+# 학생 입력창 붙여넣기 차단
+# ============================================================
+
+def disable_paste():
+
+    st.markdown(
+        """
+        <script>
+        // Ctrl + V / Ctrl + Shift + V / Shift + Insert 차단
+        document.addEventListener(
+            "keydown",
+            function(event) {
+
+                if (
+                    (event.ctrlKey &&
+                    (event.key === "v" ||
+                     event.key === "V")) ||
+
+                    (event.shiftKey &&
+                    event.key === "Insert")
+                ) {
+                    event.preventDefault();
+
+                    alert(
+                        "📢 붙여넣기는 사용할 수 없습니다.\\n직접 입력해 주세요."
+                    );
+                }
+            },
+            true
+        );
+
+
+        // 우클릭 메뉴 차단
+        document.addEventListener(
+            "contextmenu",
+            function(event) {
+
+                event.preventDefault();
+
+            },
+            true
+        );
+
+
+        // 붙여넣기 이벤트 자체 차단
+        document.addEventListener(
+            "paste",
+            function(event) {
+
+                event.preventDefault();
+
+                alert(
+                    "📢 붙여넣기는 사용할 수 없습니다.\\n직접 입력해 주세요."
+                );
+
+            },
+            true
+        );
+
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
 
 # ============================================================
 # 1. 기본 설정
