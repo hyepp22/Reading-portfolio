@@ -1,0 +1,20 @@
+selected = st.dataframe(
+    student_df,
+    use_container_width=True,
+    hide_index=True,
+    on_select="rerun",
+    selection_mode="single-row",
+    key="student_table"
+)
+
+selected_rows = selected.selection.rows
+
+if selected_rows:
+    selected_index = selected_rows[0]
+    selected_student = student_df.iloc[selected_index]
+
+    # 선택한 학생 정보 저장
+    st.session_state.selected_student = selected_student["이름"]
+
+    # 기존 학생 상세 화면으로 이동
+    # ↓ 현재 [학생 보기] 버튼을 눌렀을 때 실행되는 코드와 동일하게 연결
