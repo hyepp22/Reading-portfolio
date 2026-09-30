@@ -2377,94 +2377,39 @@ else:
                 display_rows
             )
 
-           selected = st.dataframe(
-    student_df,
-    use_container_width=True,
-    hide_index=True,
-    on_select="rerun",
-    selection_mode="single-row",
-    key="student_table"
-)
+            # ----------------------------------------------------
+            # 학생 목록에서 행을 클릭하면 해당 학생을 선택
+            # ----------------------------------------------------
+            table_event = st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="student_table"
+            )
 
-selected_rows = selected.selection.rows
+            selected_rows = table_event.selection.rows
 
-if selected_rows:
-    selected_index = selected_rows[0]
-    selected_student = student_df.iloc[selected_index]
+            if selected_rows:
 
-    # 선택한 학생 정보 저장
-    st.session_state.selected_student = selected_student["이름"]
+                selected_index = selected_rows[0]
 
-    # 기존 학생 상세 화면으로 이동
-    # ↓ 현재 [학생 보기] 버튼을 눌렀을 때 실행되는 코드와 동일하게 연결 
-                
+                # 현재 화면에 표시된 표의 행에서 학생 정보 가져오기
+                selected_row = display_df.iloc[selected_index]
 
-    # ========================================================
-    # 선택 학생 정보
-    # ========================================================
+                selected_label = (
+                    f"{selected_row['번호']}번 "
+                    f"{selected_row['이름']}"
+                )
 
-    student = student_map[
-        selected_student
-    ]
+                # 기존 학생 선택 메뉴와 연결
+                st.session_state[
+                    "selected_student_label"
+                ] = selected_label
 
-    grade = safe_str(
-        student["학년"]
-    )
-
-    class_name = safe_str(
-        student["반"]
-    )
-
-    student_id = safe_str(
-        student["번호"]
-    )
-
-    student_name = safe_str(
-        student["이름"]
-    )
-
-    evaluation_id = make_evaluation_id(
-        grade,
-        class_name,
-        student_id
-    )
-
-    # --------------------------------------------------------
-    # 학생 독서 기록
-    # --------------------------------------------------------
-
-    if not df_logs.empty:
-
-        student_logs = df_logs[
-            (df_logs["학년"].astype(str) == grade) &
-            (df_logs["반"].astype(str) == class_name) &
-            (df_logs["번호"].astype(str) == student_id)
-        ].copy()
-
-    else:
-
-        student_logs = pd.DataFrame()
-
-    submission_count = len(
-        student_logs
-    )
-
-    automatic_count_score = get_submission_score(
-        submission_count
-    )
-
-    count_level = get_submission_level(
-        submission_count
-    )
-
-    # --------------------------------------------------------
-    # 기존 평가 가져오기
-    # --------------------------------------------------------
-
-    existing_evaluation, existing_row_index = find_existing_evaluation(
-        ws_scores,
-        evaluation_id
-    )
+                # 다음 실행에서 해당 학생의 상세 화면 표시
+                st.rerun()
 
     # ========================================================
     # 학생 헤더
