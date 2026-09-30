@@ -2377,533 +2377,705 @@ else:
                 display_rows
             )
 
-            st.dataframe(
+            table_event = st.dataframe(
                 display_df,
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="student_table"
             )
 
-            st.info(
-                "👆 위 표의 행을 직접 클릭하는 기능은 Streamlit의 data_editor가 아니면 선택값으로 연결되지 않습니다. "
-                "아래에서 학생 이름 옆의 [학생 보기] 버튼을 누르거나, 위의 학생 선택 메뉴에서 학생을 선택하세요."
-            )
+            selected_rows = table_event.selection.rows
 
-            # 표의 학생을 실제로 선택할 수 있도록 버튼 제공
-            for _, student_row in temp_students.iterrows():
-                _grade = safe_str(student_row["학년"])
-                _class = safe_str(student_row["반"])
-                _num = safe_str(student_row["번호"])
-                _name = safe_str(student_row["이름"])
-                _label = f"{_num}번 {_name}"
+            if selected_rows:
+                selected_index = selected_rows[0]
+                selected_row = display_df.iloc[selected_index]
 
-                _c1, _c2 = st.columns([5, 1])
-                with _c1:
-                    st.write(f"**{_label}**  ·  {_grade}학년 {_class}반")
-                with _c2:
-                    if st.button(
-                        "학생 보기",
-                        key=f"view_student_{_grade}_{_class}_{_num}",
-                        use_container_width=True
-                    ):
-                        st.session_state["selected_student_label"] = _label
-                        st.rerun()
+                selected_label = (
+                    f"{selected_row['번호']}번 "
+                    f"{selected_row['이름']}"
+                )
 
-            st.stop()
+                st.session_state["selected_student_label"] = selected_label
+                st.rerun()
 
     # ========================================================
-    # 선택 학생 정보
+    # 선택한 학생 상세 화면
     # ========================================================
 
-    student = student_map[
-        selected_student
-    ]
+    if selected_student != "전체":
+        # ========================================================
+        # 선택 학생 정보
+        # ========================================================
 
-    grade = safe_str(
-        student["학년"]
-    )
+        student = student_map[
+            selected_student
+        ]
 
-    class_name = safe_str(
-        student["반"]
-    )
-
-    student_id = safe_str(
-        student["번호"]
-    )
-
-    student_name = safe_str(
-        student["이름"]
-    )
-
-    evaluation_id = make_evaluation_id(
-        grade,
-        class_name,
-        student_id
-    )
-
-    # --------------------------------------------------------
-    # 학생 독서 기록
-    # --------------------------------------------------------
-
-    if not df_logs.empty:
-
-        student_logs = df_logs[
-            (df_logs["학년"].astype(str) == grade) &
-            (df_logs["반"].astype(str) == class_name) &
-            (df_logs["번호"].astype(str) == student_id)
-        ].copy()
-
-    else:
-
-        student_logs = pd.DataFrame()
-
-    submission_count = len(
-        student_logs
-    )
-
-    automatic_count_score = get_submission_score(
-        submission_count
-    )
-
-    count_level = get_submission_level(
-        submission_count
-    )
-
-    # --------------------------------------------------------
-    # 기존 평가 가져오기
-    # --------------------------------------------------------
-
-    existing_evaluation, existing_row_index = find_existing_evaluation(
-        ws_scores,
-        evaluation_id
-    )
-
-    # ========================================================
-    # 학생 헤더
-    # ========================================================
-
-    st.divider()
-
-    header_left, header_right = st.columns(
-        [4, 1]
-    )
-
-    with header_left:
-
-        st.markdown(
-            f"## 👤 {student_name} "
-            f"<span style='font-size:16px;color:#6b7280;'>"
-            f"({grade} {class_name} {student_id}번)"
-            f"</span>",
-            unsafe_allow_html=True
+        grade = safe_str(
+            student["학년"]
         )
 
-        st.caption(
-            f"누적 독서 기록 {submission_count}회"
+        class_name = safe_str(
+            student["반"]
         )
 
-    with header_right:
+        student_id = safe_str(
+            student["번호"]
+        )
 
-        if submission_count >= 15:
+        student_name = safe_str(
+            student["이름"]
+        )
 
-            st.success(
-                f"작성 횟수 {submission_count}회"
-            )
+        evaluation_id = make_evaluation_id(
+            grade,
+            class_name,
+            student_id
+        )
 
-        elif submission_count >= 9:
+        # --------------------------------------------------------
+        # 학생 독서 기록
+        # --------------------------------------------------------
 
-            st.warning(
-                f"작성 횟수 {submission_count}회"
-            )
+        if not df_logs.empty:
+
+            student_logs = df_logs[
+                (df_logs["학년"].astype(str) == grade) &
+                (df_logs["반"].astype(str) == class_name) &
+                (df_logs["번호"].astype(str) == student_id)
+            ].copy()
 
         else:
 
-            st.error(
-                f"작성 횟수 {submission_count}회"
+            student_logs = pd.DataFrame()
+
+        submission_count = len(
+            student_logs
+        )
+
+        automatic_count_score = get_submission_score(
+            submission_count
+        )
+
+        count_level = get_submission_level(
+            submission_count
+        )
+
+        # --------------------------------------------------------
+        # 기존 평가 가져오기
+        # --------------------------------------------------------
+
+        existing_evaluation, existing_row_index = find_existing_evaluation(
+            ws_scores,
+            evaluation_id
+        )
+
+        # ========================================================
+        # 학생 헤더
+        # ========================================================
+
+        st.divider()
+
+        header_left, header_right = st.columns(
+            [4, 1]
+        )
+
+        with header_left:
+
+            st.markdown(
+                f"## 👤 {student_name} "
+                f"<span style='font-size:16px;color:#6b7280;'>"
+                f"({grade} {class_name} {student_id}번)"
+                f"</span>",
+                unsafe_allow_html=True
             )
 
-    # ========================================================
-    # 왼쪽: 학생 기록 / 오른쪽: 평가
-    # ========================================================
-
-    left_col, right_col = st.columns(
-        [1.25, 1],
-        gap="large"
-    )
-
-    # ========================================================
-    # 왼쪽 학생 기록
-    # ========================================================
-
-    with left_col:
-
-        st.markdown(
-            "### 📚 제출된 독서 포트폴리오"
-        )
-
-        if student_logs.empty:
-
-            st.warning(
-                "아직 제출된 독서 기록이 없습니다."
+            st.caption(
+                f"누적 독서 기록 {submission_count}회"
             )
 
-        else:
+        with header_right:
 
-            # 날짜순 정렬
-            if "날짜" in student_logs.columns:
+            if submission_count >= 15:
 
-                student_logs = student_logs.sort_values(
-                    by="날짜"
+                st.success(
+                    f"작성 횟수 {submission_count}회"
                 )
 
-            for i, (_, row) in enumerate(
-                student_logs.iterrows(),
-                start=1
-            ):
+            elif submission_count >= 9:
 
-                book_title = safe_str(
-                    row.get("책 제목")
-                )
-
-                log_date = safe_str(
-                    row.get("날짜")
-                )
-
-                with st.expander(
-                    f"📖 {i}차시 · "
-                    f"{log_date} · "
-                    f"{book_title}",
-                    expanded=(i == len(student_logs))
-                ):
-
-                    st.markdown(
-                        f"**작가:** "
-                        f"{safe_str(row.get('작가'))}"
-                    )
-
-                    st.markdown(
-                        f"**읽은 페이지:** "
-                        f"{safe_str(row.get('읽은 페이지'))}"
-                    )
-
-                    st.markdown(
-                        "#### ① 오늘 읽은 내용 요약"
-                    )
-
-                    st.write(
-                        safe_str(row.get("요약"))
-                    )
-
-                    st.markdown(
-                        "#### ② 인상 깊은 내용"
-                    )
-
-                    st.write(
-                        safe_str(row.get("인상깊은 내용"))
-                    )
-
-                    st.markdown(
-                        "#### ③ 나의 질문"
-                    )
-
-                    st.write(
-                        safe_str(row.get("질문"))
-                    )
-
-                    st.markdown(
-                        "#### ④ 질문에 대한 답변"
-                    )
-
-                    st.write(
-                        safe_str(row.get("답변"))
-                    )
-
-                    st.markdown(
-                        "#### ⑤ 나의 생각과 느낌"
-                    )
-
-                    st.write(
-                        safe_str(row.get("느낀점"))
-                    )
-
-    # ========================================================
-    # 오른쪽: 평가
-    # ========================================================
-
-    with right_col:
-
-        st.markdown(
-            "### 🤖 AI 수행평가"
-        )
-
-        st.info(
-            "AI는 ① 내용의 이해도, "
-            "② 작성의 충실도, "
-            "③ 감상의 깊이를 평가합니다. "
-            "④ 작성 횟수는 실제 제출 횟수로 자동 계산됩니다."
-        )
-
-        # ----------------------------------------------------
-        # 기존 AI 평가값
-        # ----------------------------------------------------
-
-        ai_understanding = 0
-        ai_completeness = 0
-        ai_depth = 0
-        ai_total = 0
-        ai_reason = ""
-        ai_feedback = ""
-
-        teacher_understanding = 10
-        teacher_completeness = 10
-        teacher_depth = 10
-        teacher_count = automatic_count_score
-        teacher_feedback = ""
-
-        if existing_evaluation is not None:
-
-            try:
-
-                ai_understanding = int(
-                    float(
-                        safe_str(
-                            existing_evaluation["AI_내용이해"]
-                        ) or 0
-                    )
-                )
-
-                ai_completeness = int(
-                    float(
-                        safe_str(
-                            existing_evaluation["AI_작성충실도"]
-                        ) or 0
-                    )
-                )
-
-                ai_depth = int(
-                    float(
-                        safe_str(
-                            existing_evaluation["AI_감상의깊이"]
-                        ) or 0
-                    )
-                )
-
-                ai_total = int(
-                    float(
-                        safe_str(
-                            existing_evaluation["AI_총점"]
-                        ) or 0
-                    )
-                )
-
-                ai_reason = safe_str(
-                    existing_evaluation["AI_평가근거"]
-                )
-
-                ai_feedback = safe_str(
-                    existing_evaluation["AI_종합피드백"]
-                )
-
-                teacher_understanding = int(
-                    float(
-                        safe_str(
-                            existing_evaluation["교사_내용이해"]
-                        )
-                        or ai_understanding
-                        or 10
-                    )
-                )
-
-                teacher_completeness = int(
-                    float(
-                        safe_str(
-                            existing_evaluation["교사_작성충실도"]
-                        )
-                        or ai_completeness
-                        or 10
-                    )
-                )
-
-                teacher_depth = int(
-                    float(
-                        safe_str(
-                            existing_evaluation["교사_감상의깊이"]
-                        )
-                        or ai_depth
-                        or 10
-                    )
-                )
-
-                teacher_count = automatic_count_score
-
-                saved_teacher_feedback = safe_str(
-                    existing_evaluation["교사_피드백"]
-                )
-
-                teacher_feedback = (
-                    saved_teacher_feedback
-                )
-
-            except Exception:
-
-                pass
-
-        # ----------------------------------------------------
-        # AI 실행 버튼
-        # ----------------------------------------------------
-
-        if st.button(
-            "✨ AI 자동 채점 실행",
-            use_container_width=True,
-            type="primary"
-        ):
-
-            if student_logs.empty:
-
-                st.error(
-                    "학생의 독서 기록이 없습니다."
+                st.warning(
+                    f"작성 횟수 {submission_count}회"
                 )
 
             else:
 
-                records = (
-                    student_logs
-                    .fillna("")
-                    .to_dict("records")
+                st.error(
+                    f"작성 횟수 {submission_count}회"
                 )
 
-                with st.spinner(
-                    "AI가 학생의 누적 독서 포트폴리오를 분석하고 있습니다..."
-                ):
+        # ========================================================
+        # 왼쪽: 학생 기록 / 오른쪽: 평가
+        # ========================================================
 
-                    try:
-
-                        ai_result = run_ai_evaluation(
-                            student_name,
-                            records
-                        )
-
-                        ai_understanding = int(
-                            ai_result[
-                                "내용이해_점수"
-                            ]
-                        )
-
-                        ai_completeness = int(
-                            ai_result[
-                                "작성충실도_점수"
-                            ]
-                        )
-
-                        ai_depth = int(
-                            ai_result[
-                                "감상의깊이_점수"
-                            ]
-                        )
-
-                        ai_total = (
-                            ai_understanding
-                            + ai_completeness
-                            + ai_depth
-                            + automatic_count_score
-                        )
-
-                        ai_reason = (
-                            "① 내용의 이해도\n"
-                            + ai_result[
-                                "내용이해_근거"
-                            ]
-                            + "\n\n"
-                            + "② 작성의 충실도\n"
-                            + ai_result[
-                                "작성충실도_근거"
-                            ]
-                            + "\n\n"
-                            + "③ 감상의 깊이\n"
-                            + ai_result[
-                                "감상의깊이_근거"
-                            ]
-                        )
-
-                        ai_feedback = ai_result[
-                            "종합피드백"
-                        ]
-
-                        # AI 결과를 session_state에 저장
-                        st.session_state[
-                            f"ai_{evaluation_id}"
-                        ] = {
-                            "understanding": ai_understanding,
-                            "completeness": ai_completeness,
-                            "depth": ai_depth,
-                            "total": ai_total,
-                            "reason": ai_reason,
-                            "feedback": ai_feedback
-                        }
-
-                        st.success(
-                            "AI 평가가 완료되었습니다."
-                        )
-
-                        st.rerun()
-
-                    except Exception as e:
-
-                        st.error(
-                            f"AI 평가 중 오류가 발생했습니다: {e}"
-                        )
-
-        # ----------------------------------------------------
-        # Session State의 최신 AI 결과 반영
-        # ----------------------------------------------------
-
-        session_ai_key = (
-            f"ai_{evaluation_id}"
+        left_col, right_col = st.columns(
+            [1.25, 1],
+            gap="large"
         )
 
-        if session_ai_key in st.session_state:
+        # ========================================================
+        # 왼쪽 학생 기록
+        # ========================================================
 
-            current_ai = st.session_state[
-                session_ai_key
+        with left_col:
+
+            st.markdown(
+                "### 📚 제출된 독서 포트폴리오"
+            )
+
+            if student_logs.empty:
+
+                st.warning(
+                    "아직 제출된 독서 기록이 없습니다."
+                )
+
+            else:
+
+                # 날짜순 정렬
+                if "날짜" in student_logs.columns:
+
+                    student_logs = student_logs.sort_values(
+                        by="날짜"
+                    )
+
+                for i, (_, row) in enumerate(
+                    student_logs.iterrows(),
+                    start=1
+                ):
+
+                    book_title = safe_str(
+                        row.get("책 제목")
+                    )
+
+                    log_date = safe_str(
+                        row.get("날짜")
+                    )
+
+                    with st.expander(
+                        f"📖 {i}차시 · "
+                        f"{log_date} · "
+                        f"{book_title}",
+                        expanded=(i == len(student_logs))
+                    ):
+
+                        st.markdown(
+                            f"**작가:** "
+                            f"{safe_str(row.get('작가'))}"
+                        )
+
+                        st.markdown(
+                            f"**읽은 페이지:** "
+                            f"{safe_str(row.get('읽은 페이지'))}"
+                        )
+
+                        st.markdown(
+                            "#### ① 오늘 읽은 내용 요약"
+                        )
+
+                        st.write(
+                            safe_str(row.get("요약"))
+                        )
+
+                        st.markdown(
+                            "#### ② 인상 깊은 내용"
+                        )
+
+                        st.write(
+                            safe_str(row.get("인상깊은 내용"))
+                        )
+
+                        st.markdown(
+                            "#### ③ 나의 질문"
+                        )
+
+                        st.write(
+                            safe_str(row.get("질문"))
+                        )
+
+                        st.markdown(
+                            "#### ④ 질문에 대한 답변"
+                        )
+
+                        st.write(
+                            safe_str(row.get("답변"))
+                        )
+
+                        st.markdown(
+                            "#### ⑤ 나의 생각과 느낌"
+                        )
+
+                        st.write(
+                            safe_str(row.get("느낀점"))
+                        )
+
+        # ========================================================
+        # 오른쪽: 평가
+        # ========================================================
+
+        with right_col:
+
+            st.markdown(
+                "### 🤖 AI 수행평가"
+            )
+
+            st.info(
+                "AI는 ① 내용의 이해도, "
+                "② 작성의 충실도, "
+                "③ 감상의 깊이를 평가합니다. "
+                "④ 작성 횟수는 실제 제출 횟수로 자동 계산됩니다."
+            )
+
+            # ----------------------------------------------------
+            # 기존 AI 평가값
+            # ----------------------------------------------------
+
+            ai_understanding = 0
+            ai_completeness = 0
+            ai_depth = 0
+            ai_total = 0
+            ai_reason = ""
+            ai_feedback = ""
+
+            teacher_understanding = 10
+            teacher_completeness = 10
+            teacher_depth = 10
+            teacher_count = automatic_count_score
+            teacher_feedback = ""
+
+            if existing_evaluation is not None:
+
+                try:
+
+                    ai_understanding = int(
+                        float(
+                            safe_str(
+                                existing_evaluation["AI_내용이해"]
+                            ) or 0
+                        )
+                    )
+
+                    ai_completeness = int(
+                        float(
+                            safe_str(
+                                existing_evaluation["AI_작성충실도"]
+                            ) or 0
+                        )
+                    )
+
+                    ai_depth = int(
+                        float(
+                            safe_str(
+                                existing_evaluation["AI_감상의깊이"]
+                            ) or 0
+                        )
+                    )
+
+                    ai_total = int(
+                        float(
+                            safe_str(
+                                existing_evaluation["AI_총점"]
+                            ) or 0
+                        )
+                    )
+
+                    ai_reason = safe_str(
+                        existing_evaluation["AI_평가근거"]
+                    )
+
+                    ai_feedback = safe_str(
+                        existing_evaluation["AI_종합피드백"]
+                    )
+
+                    teacher_understanding = int(
+                        float(
+                            safe_str(
+                                existing_evaluation["교사_내용이해"]
+                            )
+                            or ai_understanding
+                            or 10
+                        )
+                    )
+
+                    teacher_completeness = int(
+                        float(
+                            safe_str(
+                                existing_evaluation["교사_작성충실도"]
+                            )
+                            or ai_completeness
+                            or 10
+                        )
+                    )
+
+                    teacher_depth = int(
+                        float(
+                            safe_str(
+                                existing_evaluation["교사_감상의깊이"]
+                            )
+                            or ai_depth
+                            or 10
+                        )
+                    )
+
+                    teacher_count = automatic_count_score
+
+                    saved_teacher_feedback = safe_str(
+                        existing_evaluation["교사_피드백"]
+                    )
+
+                    teacher_feedback = (
+                        saved_teacher_feedback
+                    )
+
+                except Exception:
+
+                    pass
+
+            # ----------------------------------------------------
+            # AI 실행 버튼
+            # ----------------------------------------------------
+
+            if st.button(
+                "✨ AI 자동 채점 실행",
+                use_container_width=True,
+                type="primary"
+            ):
+
+                if student_logs.empty:
+
+                    st.error(
+                        "학생의 독서 기록이 없습니다."
+                    )
+
+                else:
+
+                    records = (
+                        student_logs
+                        .fillna("")
+                        .to_dict("records")
+                    )
+
+                    with st.spinner(
+                        "AI가 학생의 누적 독서 포트폴리오를 분석하고 있습니다..."
+                    ):
+
+                        try:
+
+                            ai_result = run_ai_evaluation(
+                                student_name,
+                                records
+                            )
+
+                            ai_understanding = int(
+                                ai_result[
+                                    "내용이해_점수"
+                                ]
+                            )
+
+                            ai_completeness = int(
+                                ai_result[
+                                    "작성충실도_점수"
+                                ]
+                            )
+
+                            ai_depth = int(
+                                ai_result[
+                                    "감상의깊이_점수"
+                                ]
+                            )
+
+                            ai_total = (
+                                ai_understanding
+                                + ai_completeness
+                                + ai_depth
+                                + automatic_count_score
+                            )
+
+                            ai_reason = (
+                                "① 내용의 이해도\n"
+                                + ai_result[
+                                    "내용이해_근거"
+                                ]
+                                + "\n\n"
+                                + "② 작성의 충실도\n"
+                                + ai_result[
+                                    "작성충실도_근거"
+                                ]
+                                + "\n\n"
+                                + "③ 감상의 깊이\n"
+                                + ai_result[
+                                    "감상의깊이_근거"
+                                ]
+                            )
+
+                            ai_feedback = ai_result[
+                                "종합피드백"
+                            ]
+
+                            # AI 결과를 session_state에 저장
+                            st.session_state[
+                                f"ai_{evaluation_id}"
+                            ] = {
+                                "understanding": ai_understanding,
+                                "completeness": ai_completeness,
+                                "depth": ai_depth,
+                                "total": ai_total,
+                                "reason": ai_reason,
+                                "feedback": ai_feedback
+                            }
+
+                            st.success(
+                                "AI 평가가 완료되었습니다."
+                            )
+
+                            st.rerun()
+
+                        except Exception as e:
+
+                            st.error(
+                                f"AI 평가 중 오류가 발생했습니다: {e}"
+                            )
+
+            # ----------------------------------------------------
+            # Session State의 최신 AI 결과 반영
+            # ----------------------------------------------------
+
+            session_ai_key = (
+                f"ai_{evaluation_id}"
+            )
+
+            if session_ai_key in st.session_state:
+
+                current_ai = st.session_state[
+                    session_ai_key
+                ]
+
+                ai_understanding = current_ai[
+                    "understanding"
+                ]
+
+                ai_completeness = current_ai[
+                    "completeness"
+                ]
+
+                ai_depth = current_ai[
+                    "depth"
+                ]
+
+                ai_total = current_ai[
+                    "total"
+                ]
+
+                ai_reason = current_ai[
+                    "reason"
+                ]
+
+                ai_feedback = current_ai[
+                    "feedback"
+                ]
+
+            # ----------------------------------------------------
+            # AI 점수 표시
+            # ----------------------------------------------------
+
+            if ai_total > 0:
+
+                st.markdown(
+                    f"""
+                    <div class="ai-box">
+                        <div style="color:#6b7280;font-size:14px;">
+                            AI 추천 총점
+                        </div>
+                        <div class="score-number">
+                            {ai_total}
+                            <span style="font-size:16px;">
+                            / 100점
+                            </span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                st.write("")
+
+                a1, a2 = st.columns(2)
+
+                with a1:
+
+                    st.metric(
+                        "① 내용의 이해도",
+                        f"{ai_understanding} / 25"
+                    )
+
+                    st.metric(
+                        "② 작성의 충실도",
+                        f"{ai_completeness} / 25"
+                    )
+
+                with a2:
+
+                    st.metric(
+                        "③ 감상의 깊이",
+                        f"{ai_depth} / 25"
+                    )
+
+                    st.metric(
+                        "④ 작성 횟수",
+                        f"{automatic_count_score} / 25"
+                    )
+
+                with st.expander(
+                    "🔍 AI 평가 근거 보기",
+                    expanded=False
+                ):
+
+                    st.write(
+                        ai_reason
+                    )
+
+                with st.expander(
+                    "💬 AI 종합 피드백",
+                    expanded=True
+                ):
+
+                    st.write(
+                        ai_feedback
+                    )
+
+            else:
+
+                st.warning(
+                    "아직 AI 평가가 실행되지 않았습니다."
+                )
+
+            st.divider()
+
+            # ====================================================
+            # 교사 최종 평가
+            # ====================================================
+
+            st.markdown(
+                "### ✏️ 교사 최종 평가"
+            )
+
+            st.caption(
+                "AI 추천 점수를 검토한 뒤 선생님이 최종 점수를 직접 수정할 수 있습니다."
+            )
+
+            score_options = [
+                25,
+                20,
+                15,
+                10
             ]
 
-            ai_understanding = current_ai[
-                "understanding"
-            ]
+            # ----------------------------------------------------
+            # 교사 점수 - 버튼 선택 방식
+            # ----------------------------------------------------
 
-            ai_completeness = current_ai[
-                "completeness"
-            ]
+            def score_button_selector(label, current_value, state_key):
+                """10/15/20/25점 중 하나를 버튼으로 선택합니다."""
 
-            ai_depth = current_ai[
-                "depth"
-            ]
+                if state_key not in st.session_state:
+                    st.session_state[state_key] = (
+                        current_value
+                        if current_value in score_options
+                        else 10
+                    )
 
-            ai_total = current_ai[
-                "total"
-            ]
+                st.markdown(f"**{label}**")
 
-            ai_reason = current_ai[
-                "reason"
-            ]
+                button_cols = st.columns(4)
 
-            ai_feedback = current_ai[
-                "feedback"
-            ]
+                for col, score in zip(button_cols, score_options):
+                    with col:
+                        is_selected = (
+                            st.session_state[state_key] == score
+                        )
 
-        # ----------------------------------------------------
-        # AI 점수 표시
-        # ----------------------------------------------------
+                        if st.button(
+                            f"{'✓ ' if is_selected else ''}{score}점",
+                            key=f"{state_key}_{score}",
+                            use_container_width=True,
+                            type="primary" if is_selected else "secondary"
+                        ):
+                            st.session_state[state_key] = score
 
-        if ai_total > 0:
+                selected_score = st.session_state[state_key]
+
+                st.caption(
+                    f"현재 선택: **{selected_score}점 / 25점**"
+                )
+
+                return selected_score
+
+            teacher_understanding = score_button_selector(
+                "① 내용의 이해도",
+                teacher_understanding,
+                f"teacher_understanding_{evaluation_id}"
+            )
+
+            teacher_completeness = score_button_selector(
+                "② 작성의 충실도",
+                teacher_completeness,
+                f"teacher_completeness_{evaluation_id}"
+            )
+
+            teacher_depth = score_button_selector(
+                "③ 감상의 깊이",
+                teacher_depth,
+                f"teacher_depth_{evaluation_id}"
+            )
+
+            # ----------------------------------------------------
+            # 작성 횟수는 자동 점수
+            # ----------------------------------------------------
 
             st.markdown(
                 f"""
-                <div class="ai-box">
-                    <div style="color:#6b7280;font-size:14px;">
-                        AI 추천 총점
+                **④ 작성 횟수(누락 여부)**
+
+                제출 횟수: **{submission_count}회**
+
+                평가 수준: **{count_level}**
+
+                자동 점수: **{automatic_count_score} / 25점**
+                """
+            )
+
+            teacher_count = automatic_count_score
+
+            # ----------------------------------------------------
+            # 최종 점수
+            # ----------------------------------------------------
+
+            final_score = (
+                teacher_understanding
+                + teacher_completeness
+                + teacher_depth
+                + teacher_count
+            )
+
+            st.markdown(
+                f"""
+                <div class="score-box">
+                    <div style="color:#6b7280;">
+                        교사 최종 평가 점수
                     </div>
                     <div class="score-number">
-                        {ai_total}
+                        {final_score}
                         <span style="font-size:16px;">
                         / 100점
                         </span>
@@ -2913,269 +3085,92 @@ else:
                 unsafe_allow_html=True
             )
 
-            st.write("")
+            # ----------------------------------------------------
+            # 교사 피드백
+            # ----------------------------------------------------
 
-            a1, a2 = st.columns(2)
-
-            with a1:
-
-                st.metric(
-                    "① 내용의 이해도",
-                    f"{ai_understanding} / 25"
-                )
-
-                st.metric(
-                    "② 작성의 충실도",
-                    f"{ai_completeness} / 25"
-                )
-
-            with a2:
-
-                st.metric(
-                    "③ 감상의 깊이",
-                    f"{ai_depth} / 25"
-                )
-
-                st.metric(
-                    "④ 작성 횟수",
-                    f"{automatic_count_score} / 25"
-                )
-
-            with st.expander(
-                "🔍 AI 평가 근거 보기",
-                expanded=False
-            ):
-
-                st.write(
-                    ai_reason
-                )
-
-            with st.expander(
-                "💬 AI 종합 피드백",
-                expanded=True
-            ):
-
-                st.write(
-                    ai_feedback
-                )
-
-        else:
-
-            st.warning(
-                "아직 AI 평가가 실행되지 않았습니다."
+            teacher_feedback = st.text_area(
+                "📝 교사 피드백",
+                value=teacher_feedback,
+                height=160,
+                placeholder=(
+                    "학생에게 전달할 피드백이나 "
+                    "교사의 평가 메모를 입력하세요."
+                ),
+                key=f"teacher_feedback_{evaluation_id}"
             )
 
-        st.divider()
+            # ----------------------------------------------------
+            # 최종 평가 저장
+            # ----------------------------------------------------
 
-        # ====================================================
-        # 교사 최종 평가
-        # ====================================================
+            if st.button(
+                "💾 최종 평가 결과 저장",
+                use_container_width=True,
+                type="primary"
+            ):
 
-        st.markdown(
-            "### ✏️ 교사 최종 평가"
-        )
+                try:
 
-        st.caption(
-            "AI 추천 점수를 검토한 뒤 선생님이 최종 점수를 직접 수정할 수 있습니다."
-        )
-
-        score_options = [
-            25,
-            20,
-            15,
-            10
-        ]
-
-        # ----------------------------------------------------
-        # 교사 점수 - 버튼 선택 방식
-        # ----------------------------------------------------
-
-        def score_button_selector(label, current_value, state_key):
-            """10/15/20/25점 중 하나를 버튼으로 선택합니다."""
-
-            if state_key not in st.session_state:
-                st.session_state[state_key] = (
-                    current_value
-                    if current_value in score_options
-                    else 10
-                )
-
-            st.markdown(f"**{label}**")
-
-            button_cols = st.columns(4)
-
-            for col, score in zip(button_cols, score_options):
-                with col:
-                    is_selected = (
-                        st.session_state[state_key] == score
+                    # AI 결과가 아직 없는 경우
+                    # AI 점수는 빈 값으로 저장
+                    save_evaluation(
+                        ws_scores,
+                        evaluation_id,
+                        grade,
+                        class_name,
+                        student_id,
+                        student_name,
+                        ai_understanding,
+                        ai_completeness,
+                        ai_depth,
+                        submission_count,
+                        ai_total,
+                        teacher_understanding,
+                        teacher_completeness,
+                        teacher_depth,
+                        teacher_count,
+                        final_score,
+                        ai_reason,
+                        ai_feedback,
+                        teacher_feedback
                     )
 
-                    if st.button(
-                        f"{'✓ ' if is_selected else ''}{score}점",
-                        key=f"{state_key}_{score}",
-                        use_container_width=True,
-                        type="primary" if is_selected else "secondary"
-                    ):
-                        st.session_state[state_key] = score
+                    st.cache_data.clear()
 
-            selected_score = st.session_state[state_key]
+                    st.success(
+                        f"✅ {student_name} 학생의 "
+                        f"최종 평가가 저장되었습니다."
+                    )
 
-            st.caption(
-                f"현재 선택: **{selected_score}점 / 25점**"
-            )
+                    # 새로고침
+                    st.rerun()
 
-            return selected_score
+                except Exception as e:
 
-        teacher_understanding = score_button_selector(
-            "① 내용의 이해도",
-            teacher_understanding,
-            f"teacher_understanding_{evaluation_id}"
-        )
+                    st.error(
+                        f"평가 결과 저장 중 오류가 발생했습니다: {e}"
+                    )
 
-        teacher_completeness = score_button_selector(
-            "② 작성의 충실도",
-            teacher_completeness,
-            f"teacher_completeness_{evaluation_id}"
-        )
+            # ----------------------------------------------------
+            # 학생 목록으로 돌아가기
+            # ----------------------------------------------------
 
-        teacher_depth = score_button_selector(
-            "③ 감상의 깊이",
-            teacher_depth,
-            f"teacher_depth_{evaluation_id}"
-        )
-
-        # ----------------------------------------------------
-        # 작성 횟수는 자동 점수
-        # ----------------------------------------------------
-
-        st.markdown(
-            f"""
-            **④ 작성 횟수(누락 여부)**
-
-            제출 횟수: **{submission_count}회**
-
-            평가 수준: **{count_level}**
-
-            자동 점수: **{automatic_count_score} / 25점**
-            """
-        )
-
-        teacher_count = automatic_count_score
-
-        # ----------------------------------------------------
-        # 최종 점수
-        # ----------------------------------------------------
-
-        final_score = (
-            teacher_understanding
-            + teacher_completeness
-            + teacher_depth
-            + teacher_count
-        )
-
-        st.markdown(
-            f"""
-            <div class="score-box">
-                <div style="color:#6b7280;">
-                    교사 최종 평가 점수
-                </div>
-                <div class="score-number">
-                    {final_score}
-                    <span style="font-size:16px;">
-                    / 100점
-                    </span>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        # ----------------------------------------------------
-        # 교사 피드백
-        # ----------------------------------------------------
-
-        teacher_feedback = st.text_area(
-            "📝 교사 피드백",
-            value=teacher_feedback,
-            height=160,
-            placeholder=(
-                "학생에게 전달할 피드백이나 "
-                "교사의 평가 메모를 입력하세요."
-            ),
-            key=f"teacher_feedback_{evaluation_id}"
-        )
-
-        # ----------------------------------------------------
-        # 최종 평가 저장
-        # ----------------------------------------------------
-
-        if st.button(
-            "💾 최종 평가 결과 저장",
-            use_container_width=True,
-            type="primary"
-        ):
-
-            try:
-
-                # AI 결과가 아직 없는 경우
-                # AI 점수는 빈 값으로 저장
-                save_evaluation(
-                    ws_scores,
-                    evaluation_id,
-                    grade,
-                    class_name,
-                    student_id,
-                    student_name,
-                    ai_understanding,
-                    ai_completeness,
-                    ai_depth,
-                    submission_count,
-                    ai_total,
-                    teacher_understanding,
-                    teacher_completeness,
-                    teacher_depth,
-                    teacher_count,
-                    final_score,
-                    ai_reason,
-                    ai_feedback,
-                    teacher_feedback
-                )
-
-                st.cache_data.clear()
-
-                st.success(
-                    f"✅ {student_name} 학생의 "
-                    f"최종 평가가 저장되었습니다."
-                )
-
-                # 새로고침
+            if st.button(
+                "👥 학생 목록으로 돌아가기",
+                use_container_width=True
+            ):
+                # selectbox가 이미 생성된 뒤에는 그 위젯의 session_state 값을
+                # 직접 변경하지 않고, 다음 실행에서 사용할 선택값만 변경합니다.
+                st.session_state["selected_student_label"] = "전체"
                 st.rerun()
 
-            except Exception as e:
+            # ----------------------------------------------------
+            # 저장된 평가 정보
+            # ----------------------------------------------------
 
-                st.error(
-                    f"평가 결과 저장 중 오류가 발생했습니다: {e}"
+            if existing_evaluation is not None:
+
+                st.caption(
+                    "☑️ 이 학생은 이전에 평가 결과가 저장되어 있습니다."
                 )
-
-        # ----------------------------------------------------
-        # 학생 목록으로 돌아가기
-        # ----------------------------------------------------
-
-        if st.button(
-            "👥 학생 목록으로 돌아가기",
-            use_container_width=True
-        ):
-            # selectbox가 이미 생성된 뒤에는 그 위젯의 session_state 값을
-            # 직접 변경하지 않고, 다음 실행에서 사용할 선택값만 변경합니다.
-            st.session_state["selected_student_label"] = "전체"
-            st.rerun()
-
-        # ----------------------------------------------------
-        # 저장된 평가 정보
-        # ----------------------------------------------------
-
-        if existing_evaluation is not None:
-
-            st.caption(
-                "☑️ 이 학생은 이전에 평가 결과가 저장되어 있습니다."
-            )
