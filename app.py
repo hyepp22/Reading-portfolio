@@ -2377,38 +2377,27 @@ else:
                 display_rows
             )
 
-            st.dataframe(
-                display_df,
-                use_container_width=True,
-                hide_index=True
-            )
+           selected = st.dataframe(
+    student_df,
+    use_container_width=True,
+    hide_index=True,
+    on_select="rerun",
+    selection_mode="single-row",
+    key="student_table"
+)
 
-            st.info(
-                "👆 위 표의 행을 직접 클릭하는 기능은 Streamlit의 data_editor가 아니면 선택값으로 연결되지 않습니다. "
-                "아래에서 학생 이름 옆의 [학생 보기] 버튼을 누르거나, 위의 학생 선택 메뉴에서 학생을 선택하세요."
-            )
+selected_rows = selected.selection.rows
 
-            # 표의 학생을 실제로 선택할 수 있도록 버튼 제공
-            for _, student_row in temp_students.iterrows():
-                _grade = safe_str(student_row["학년"])
-                _class = safe_str(student_row["반"])
-                _num = safe_str(student_row["번호"])
-                _name = safe_str(student_row["이름"])
-                _label = f"{_num}번 {_name}"
+if selected_rows:
+    selected_index = selected_rows[0]
+    selected_student = student_df.iloc[selected_index]
 
-                _c1, _c2 = st.columns([5, 1])
-                with _c1:
-                    st.write(f"**{_label}**  ·  {_grade}학년 {_class}반")
-                with _c2:
-                    if st.button(
-                        "학생 보기",
-                        key=f"view_student_{_grade}_{_class}_{_num}",
-                        use_container_width=True
-                    ):
-                        st.session_state["selected_student_label"] = _label
-                        st.rerun()
+    # 선택한 학생 정보 저장
+    st.session_state.selected_student = selected_student["이름"]
 
-            st.stop()
+    # 기존 학생 상세 화면으로 이동
+    # ↓ 현재 [학생 보기] 버튼을 눌렀을 때 실행되는 코드와 동일하게 연결 
+                
 
     # ========================================================
     # 선택 학생 정보
