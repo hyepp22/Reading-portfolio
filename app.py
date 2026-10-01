@@ -1186,7 +1186,33 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
 
             st.markdown("### 🔑 학생 로그인")
 
-            c1, c2, c3, c4 = st.columns(4)
+            # student_list에 여러 학년도가 누적되므로, 로그인할 학년도를 먼저 선택합니다.
+            try:
+                _student_records_for_year = read_sheet_records("student_list")
+                _student_years = sorted({
+                    safe_str(r.get("학년도")).strip()
+                    for r in _student_records_for_year
+                    if safe_str(r.get("학년도")).strip()
+                }, reverse=True)
+            except Exception:
+                _student_years = []
+
+            if not _student_years:
+                _student_years = [str(get_current_school_year())]
+
+            default_year = str(get_current_school_year())
+            if default_year not in _student_years:
+                default_year = _student_years[0]
+
+            c0, c1, c2, c3, c4 = st.columns(5)
+
+            with c0:
+                school_year = st.selectbox(
+                    "학년도",
+                    _student_years,
+                    index=_student_years.index(default_year),
+                    key="s_school_year"
+                )
 
             with c1:
                 grade = st.selectbox(
@@ -1249,11 +1275,11 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                         read_sheet_records("student_list")
                     )
 
-                    current_school_year = get_current_school_year()
+                    selected_school_year = str(school_year).strip()
                     if "학년도" in df_std.columns:
                         df_std = df_std[
                             df_std["학년도"].astype(str).str.strip()
-                            == str(current_school_year)
+                            == selected_school_year
                         ]
 
                     user_match = df_std[
@@ -1278,7 +1304,7 @@ if user_type == "👨‍🎓 학생용 (독서 기록)":
                             "class_name": class_name,
                             "student_id": student_id,
                             "student_name": user_match.iloc[0]["이름"],
-                            "school_year": current_school_year
+                            "school_year": int(selected_school_year) if selected_school_year.isdigit() else selected_school_year
                         }
 
                         st.rerun()
