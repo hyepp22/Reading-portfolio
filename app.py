@@ -80,13 +80,12 @@ def disable_paste():
 
 SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
-# AI 평가에 사용할 모델
-GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_FALLBACK_MODEL = "gemini-1.5-flash"
+# AI 평가 및 OCR에 사용할 모델
+GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_FALLBACK_MODEL = "gemini-3.8-flash"
+
 OCR_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash"
+    "gemini-3.8-flash"
 ]
 
 # portfolio_scores 시트의 열 이름
