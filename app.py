@@ -505,8 +505,14 @@ def read_evaluation_settings():
         str(c).replace("\ufeff", "").strip()
         for c in df.columns
     ]
+    # 평가 설정의 식별자는 portfolio_scores의 학생별 "평가ID"와 별개로
+    # "평가설정ID"를 사용합니다. 기존 시트가 평가ID라는 헤더를 사용한
+    # 경우에는 자동으로 평가설정ID로 호환합니다.
+    if "평가설정ID" not in df.columns and "평가ID" in df.columns:
+        df = df.rename(columns={"평가ID": "평가설정ID"})
+
     required = [
-        "평가ID", "학년도", "학기", "학년", "평가명", "총차시",
+        "평가설정ID", "학년도", "학기", "학년", "평가명", "총차시",
         "기준ID", "평가기준", "배점",
         "매우우수점수", "우수점수", "보통점수", "노력요함점수",
         "매우우수 설명", "우수 설명", "보통 설명", "노력요함 설명"
@@ -518,19 +524,19 @@ def read_evaluation_settings():
 
 
 def get_assessment_list():
-    """setting 시트에서 평가ID 단위의 평가 목록을 반환합니다."""
+    """setting 시트에서 평가설정ID 단위의 평가 목록을 반환합니다."""
     df = read_evaluation_settings()
     if df.empty:
         return []
     result = []
     seen = set()
     for _, row in df.iterrows():
-        assessment_id = safe_str(row["평가ID"]).strip()
+        assessment_id = safe_str(row["평가설정ID"]).strip()
         if not assessment_id or assessment_id in seen:
             continue
         seen.add(assessment_id)
         result.append({
-            "평가ID": assessment_id,
+            "평가설정ID": assessment_id,
             "학년도": safe_str(row["학년도"]),
             "학기": safe_str(row["학기"]),
             "학년": safe_str(row["학년"]),
@@ -541,12 +547,12 @@ def get_assessment_list():
 
 
 def get_assessment_rubric(assessment_id):
-    """선택한 평가ID에 해당하는 루브릭 행만 반환합니다."""
+    """선택한 평가설정ID에 해당하는 루브릭 행만 반환합니다."""
     df = read_evaluation_settings()
     if df.empty:
         return pd.DataFrame()
     return df[
-        df["평가ID"].astype(str).str.strip()
+        df["평가설정ID"].astype(str).str.strip()
         == str(assessment_id).strip()
     ].copy()
 
@@ -2016,10 +2022,16 @@ else:
             "이 화면에서 확인한 평가가 AI 자동 채점에 그대로 적용됩니다."
         )
 
+        if st.button("🔄 Google Sheets 설정 새로고침", key="refresh_setting", use_container_width=False):
+            read_sheet_records.clear()
+            read_sheet_headers.clear()
+            read_evaluation_settings.clear()
+            st.rerun()
+
         if not assessment_list:
             st.error(
                 "setting 시트에 평가 설정이 없습니다. "
-                "평가ID부터 루브릭 기준까지 입력해 주세요."
+                "평가설정ID부터 루브릭 기준까지 입력해 주세요."
             )
             st.stop()
 
@@ -2027,7 +2039,7 @@ else:
 
         for item in assessment_list:
             with st.expander(
-                f"📚 {item['평가ID']} · {item['평가명']} "
+                f"📚 {item['평가설정ID']} · {item['평가명']} "
                 f"({item['학년도']}학년도 {item['학기']}학기 / {item['학년']}학년)",
                 expanded=False
             ):
@@ -2035,8 +2047,8 @@ else:
                     f"**총차시:** {item['총차시']}차시"
                 )
                 rubric_view = setting_df[
-                    setting_df["평가ID"].astype(str).str.strip()
-                    == item["평가ID"]
+                    setting_df["평가설정ID"].astype(str).str.strip()
+                    == item["평가설정ID"]
                 ].copy()
 
                 show_cols = [
@@ -2071,7 +2083,7 @@ else:
     assessment_map = {}
     for item in assessment_list:
         label = (
-            f"{item['평가ID']} | {item['평가명']} | "
+            f"{item['평가설정ID']} | {item['평가명']} | "
             f"{item['학년도']}학년도 {item['학기']}학기 | "
             f"{item['학년']}학년 | {item['총차시']}차시"
         )
@@ -2089,12 +2101,12 @@ else:
         key="active_assessment_label"
     )
     active_assessment = assessment_map[active_assessment_label]
-    active_assessment_id = active_assessment["평가ID"]
+    active_assessment_id = active_assessment["평가설정ID"]
     active_rubric = get_assessment_rubric(active_assessment_id)
 
     if active_rubric.empty:
         st.error(
-            f"선택한 평가ID '{active_assessment_id}'의 루브릭을 찾을 수 없습니다."
+            f"선택한 평가설정ID '{active_assessment_id}'의 루브릭을 찾을 수 없습니다."
         )
         st.stop()
 
