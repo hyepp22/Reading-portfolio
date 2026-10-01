@@ -75,19 +75,18 @@ def disable_paste():
     )
 
 # ============================================================
-# 1. 기본 설정 (수정 부분)
+# 1. 기본 설정
 # ============================================================
 
 SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
-# AI 평가에 사용할 모델 (최신 버전으로 지정)
-GEMINI_MODEL = "gemini-3.8-flash"
-GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
-
-# 학습지 사진 OCR 전용 모델
+# AI 평가에 사용할 모델
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_FALLBACK_MODEL = "gemini-1.5-flash"
 OCR_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.5-flash-lite"
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash"
 ]
 
 # portfolio_scores 시트의 열 이름
