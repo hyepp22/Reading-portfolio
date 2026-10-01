@@ -1,5 +1,6 @@
 streamlit
 pandas
-google-genai
-gspread
+openai
 google-auth
+gspread
+google-genai==2.26.0
