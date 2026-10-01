@@ -3061,7 +3061,7 @@ else:
 
                             # AI 결과를 session_state에 저장
                             st.session_state[
-                                f"ai_{evaluation_id}"
+                                f"ai_{evaluation_id}_{active_assessment_id}"
                             ] = {
                                 "understanding": ai_understanding,
                                 "completeness": ai_completeness,
@@ -3088,7 +3088,7 @@ else:
             # ----------------------------------------------------
 
             session_ai_key = (
-                f"ai_{evaluation_id}"
+                f"ai_{evaluation_id}_{active_assessment_id}"
             )
 
             if session_ai_key in st.session_state:
@@ -3373,7 +3373,7 @@ else:
                     "학생에게 전달할 피드백이나 "
                     "교사의 평가 메모를 입력하세요."
                 ),
-                key=f"teacher_feedback_{evaluation_id}"
+                key=f"teacher_feedback_{evaluation_id}_{active_assessment_id}"
             )
 
             # ----------------------------------------------------
