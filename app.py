@@ -81,13 +81,12 @@ def disable_paste():
 SPREADSHEET_NAME = "중학교_독서포트폴리오_DB"
 
 # AI 평가에 사용할 모델
-GEMINI_MODEL = "gemini-3.8-flash"
-GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
-# 학습지 사진 OCR 전용 모델. 503(일시적 과부하) 발생 시 순서대로 전환합니다.
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_FALLBACK_MODEL = "gemini-1.5-flash"
 OCR_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash"
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash"
 ]
 
 # portfolio_scores 시트의 열 이름
@@ -175,7 +174,7 @@ def read_sheet_headers(sheet_name):
 
 
 # ============================================================
-# 3. Gemini 연결
+# 3. Gemini 연결 (보완된 버전)
 # ============================================================
 
 @st.cache_resource(show_spinner=False)
@@ -184,15 +183,15 @@ def get_gemini_client():
         api_key = st.secrets.get("GEMINI_API_KEY")
 
         if not api_key:
-            raise Exception(
-                "GEMINI_API_KEY를 Streamlit Secrets에서 찾지 못했습니다."
-            )
+            raise Exception("GEMINI_API_KEY를 Streamlit Secrets에서 찾지 못했습니다.")
 
-        api_key = str(api_key).strip()
+        api_key = str(api_key).strip().strip('"').strip("'")
 
-        if not api_key:
+        # GCP 서비스 계정 JSON이 잘못 입력된 경우 감지
+        if api_key.startswith("{") or "private_key" in api_key:
             raise Exception(
-                "GEMINI_API_KEY가 비어 있습니다."
+                "GEMINI_API_KEY에 Google Cloud 서비스 계정 JSON이 입력되었습니다. "
+                "Google AI Studio(aistudio.google.com)에서 발급받은 API Key(AIzaSy.../AQ...)를 입력해 주세요."
             )
 
         return genai.Client(api_key=api_key)
