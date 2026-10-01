@@ -174,30 +174,179 @@ def read_sheet_headers(sheet_name):
 
 
 # ============================================================
-# 3. Gemini 연결 (보완된 버전)
+# 3. Gemini 연결
 # ============================================================
 
 @st.cache_resource(show_spinner=False)
 def get_gemini_client():
+
+    api_key = st.secrets.get("GEMINI_API_KEY")
+
+    if not api_key:
+        raise Exception(
+            "GEMINI_API_KEY가 Streamlit Secrets에 없습니다."
+        )
+
+    api_key = str(api_key).strip()
+
+    # 따옴표가 Secrets 값에 실제로 들어간 경우 제거
+    if (
+        len(api_key) >= 2
+        and api_key[0] == '"'
+        and api_key[-1] == '"'
+    ):
+        api_key = api_key[1:-1].strip()
+
+    if (
+        len(api_key) >= 2
+        and api_key[0] == "'"
+        and api_key[-1] == "'"
+    ):
+        api_key = api_key[1:-1].strip()
+
+    # 서비스 계정 JSON이 Gemini API Key 자리에 들어간 경우
+    if (
+        api_key.startswith("{")
+        or "private_key" in api_key
+        or "client_email" in api_key
+    ):
+        raise Exception(
+            "GEMINI_API_KEY에 Google Cloud 서비스 계정 정보가 들어 있습니다. "
+            "Google Sheets용 [gcp_service_account]와 Gemini API Key는 별도로 사용해야 합니다."
+        )
+
+    if not api_key:
+        raise Exception(
+            "GEMINI_API_KEY가 비어 있습니다."
+        )
+
     try:
-        api_key = st.secrets.get("GEMINI_API_KEY")
 
-        if not api_key:
-            raise Exception("GEMINI_API_KEY를 Streamlit Secrets에서 찾지 못했습니다.")
+        client = genai.Client(
+            api_key=api_key
+        )
 
-        api_key = str(api_key).strip().strip('"').strip("'")
-
-        # GCP 서비스 계정 JSON이 잘못 입력된 경우 감지
-        if api_key.startswith("{") or "private_key" in api_key:
-            raise Exception(
-                "GEMINI_API_KEY에 Google Cloud 서비스 계정 JSON이 입력되었습니다. "
-                "Google AI Studio(aistudio.google.com)에서 발급받은 API Key(AIzaSy.../AQ...)를 입력해 주세요."
-            )
-
-        return genai.Client(api_key=api_key)
+        return client
 
     except Exception as e:
-        raise Exception(f"Gemini 설정 확인 필요: {e}")
+
+        raise Exception(
+            f"Gemini 클라이언트 생성에 실패했습니다: {e}"
+        )
+
+
+# ============================================================
+# Gemini 공통 호출 함수
+# ============================================================
+
+def gemini_generate_json(
+    client,
+    model_name,
+    contents,
+    config
+):
+    """
+    Gemini JSON 응답을 생성하는 공통 함수.
+
+    401 인증 오류는 재시도하지 않습니다.
+    503 서버 혼잡만 재시도합니다.
+    """
+
+    last_error = None
+
+    for attempt in range(3):
+
+        try:
+
+            response = client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config
+            )
+
+            if response is None:
+                raise Exception(
+                    "Gemini가 응답을 반환하지 않았습니다."
+                )
+
+            if not response.text:
+                raise Exception(
+                    "Gemini가 빈 응답을 반환했습니다."
+                )
+
+            return response
+
+        except Exception as e:
+
+            last_error = e
+
+            error_text = str(e).upper()
+
+            # ------------------------------------------------
+            # 인증 오류
+            # ------------------------------------------------
+
+            if (
+                "401" in error_text
+                or "UNAUTHENTICATED" in error_text
+                or "ACCESS_TOKEN_TYPE_UNSUPPORTED" in error_text
+            ):
+
+                raise Exception(
+                    "Gemini 인증에 실패했습니다.\n\n"
+                    "Streamlit Secrets의 GEMINI_API_KEY가 "
+                    "유효한 Gemini API Key인지 확인해 주세요.\n\n"
+                    f"원본 오류: {e}"
+                )
+
+            # ------------------------------------------------
+            # 권한 오류
+            # ------------------------------------------------
+
+            if "403" in error_text or "PERMISSION_DENIED" in error_text:
+
+                raise Exception(
+                    "Gemini API 사용 권한이 없습니다.\n\n"
+                    "Google AI Studio의 API Key와 프로젝트 설정을 확인해 주세요.\n\n"
+                    f"원본 오류: {e}"
+                )
+
+            # ------------------------------------------------
+            # 모델 없음
+            # ------------------------------------------------
+
+            if (
+                "404" in error_text
+                or "NOT_FOUND" in error_text
+            ):
+
+                raise Exception(
+                    f"Gemini 모델 '{model_name}'을 사용할 수 없습니다.\n\n"
+                    f"원본 오류: {e}"
+                )
+
+            # ------------------------------------------------
+            # 서버 혼잡
+            # ------------------------------------------------
+
+            is_retryable = (
+                "503" in error_text
+                or "UNAVAILABLE" in error_text
+                or "SERVICE_UNAVAILABLE" in error_text
+            )
+
+            if not is_retryable:
+                raise
+
+            if attempt < 2:
+
+                time.sleep(
+                    2 ** attempt * 2
+                )
+
+    raise Exception(
+        f"Gemini 호출에 실패했습니다: {last_error}"
+    )
 
 
 def run_worksheet_ocr(uploaded_files):
@@ -840,13 +989,36 @@ def find_existing_evaluation(ws, evaluation_id, assessment_id=None):
 # 6. AI 평가 함수
 # ============================================================
 
+
 def run_ai_evaluation(student_name, book_records, rubric_df):
-    """setting 시트의 선택된 평가 루브릭을 사용해 AI 평가를 실행합니다."""
+    """
+    setting 시트의 평가 루브릭을 사용하여
+    학생의 누적 독서 포트폴리오를 AI가 평가합니다.
+    """
 
     client = get_gemini_client()
 
+    if not book_records:
+        raise Exception(
+            "학생의 독서 기록이 없습니다."
+        )
+
+    if rubric_df is None or rubric_df.empty:
+        raise Exception(
+            "선택된 평가의 루브릭을 setting 시트에서 찾을 수 없습니다."
+        )
+
+    # ========================================================
+    # 학생 기록 구성
+    # ========================================================
+
     records_text = ""
-    for i, row in enumerate(book_records, start=1):
+
+    for i, row in enumerate(
+        book_records,
+        start=1
+    ):
+
         records_text += f"""
 ========================
 제출 기록 {i}
@@ -878,117 +1050,194 @@ def run_ai_evaluation(student_name, book_records, rubric_df):
 
 느낀점:
 {safe_str(row.get("느낀점"))}
+
 """
 
-    if rubric_df is None or rubric_df.empty:
-        raise Exception("선택된 평가의 루브릭을 setting 시트에서 찾을 수 없습니다.")
+    # ========================================================
+    # AI 평가 기준 추출
+    # ========================================================
 
-    # 작성 횟수 기준은 프로그램이 실제 제출 횟수로 계산하므로
-    # 내용 분석이 필요한 기준만 AI에게 전달합니다.
     criteria_rows = []
+
     for _, row in rubric_df.iterrows():
-        criterion = safe_str(row.get("평가기준")).strip()
-        if "작성 횟수" in criterion or "작성횟수" in criterion:
+
+        criterion = safe_str(
+            row.get("평가기준")
+        ).strip()
+
+        if (
+            "작성 횟수" in criterion
+            or "작성횟수" in criterion
+        ):
             continue
+
         criteria_rows.append(row)
 
-    if not criteria_rows:
-        raise Exception("AI가 평가할 루브릭 기준이 없습니다.")
+    if len(criteria_rows) < 3:
+
+        raise Exception(
+            "AI 평가 기준이 3개 미만입니다.\n"
+            "setting 시트에 작성 횟수를 제외한 AI 평가 기준이 "
+            "최소 3개 필요합니다."
+        )
+
+    criteria_rows = criteria_rows[:3]
+
+    # ========================================================
+    # 루브릭 텍스트 생성
+    # ========================================================
 
     rubric_parts = []
-    for idx, row in enumerate(criteria_rows, start=1):
-        criterion = safe_str(row.get("평가기준"))
-        max_score = safe_str(row.get("배점"))
-        rubric_parts.append(
-            f"""[{idx}. {criterion} / 배점 {max_score}점]
 
-매우 우수 ({safe_str(row.get("매우우수점수"))}점):
+    for idx, row in enumerate(
+        criteria_rows,
+        start=1
+    ):
+
+        rubric_parts.append(
+            f"""
+[{idx}번 평가 기준]
+
+평가기준:
+{safe_str(row.get("평가기준"))}
+
+배점:
+{safe_str(row.get("배점"))}점
+
+매우 우수:
+{safe_str(row.get("매우우수점수"))}점
 {safe_str(row.get("매우우수 설명"))}
 
-우수 ({safe_str(row.get("우수점수"))}점):
+우수:
+{safe_str(row.get("우수점수"))}점
 {safe_str(row.get("우수 설명"))}
 
-보통 ({safe_str(row.get("보통점수"))}점):
+보통:
+{safe_str(row.get("보통점수"))}점
 {safe_str(row.get("보통 설명"))}
 
-노력 요함 ({safe_str(row.get("노력요함점수"))}점):
+노력 요함:
+{safe_str(row.get("노력요함점수"))}점
 {safe_str(row.get("노력요함 설명"))}
 """
         )
 
-    rubric_text = "\n".join(rubric_parts)
+    rubric_text = "\n".join(
+        rubric_parts
+    )
+
+    # ========================================================
+    # AI 지시문
+    # ========================================================
 
     system_prompt = f"""
 너는 중학교 국어 교사의 독서 포트폴리오 수행평가를
 보조하는 평가 AI이다.
 
-학생의 전체 누적 독서 기록을 아래의 '선택된 평가 루브릭'에
-따라 평가 점수를 추천한다.
+학생의 전체 누적 독서 기록을 아래 평가 루브릭에 따라 평가한다.
 
-중요한 원칙:
-1. 학생의 실제 작성 내용에 근거해서만 판단한다.
+반드시 지켜야 할 원칙:
+
+1. 학생이 실제로 작성한 내용만 근거로 판단한다.
 2. 기록에 없는 내용을 추측하지 않는다.
-3. 학생의 글쓰기 능력 자체가 아니라 제시된 평가기준을 적용한다.
-4. 각 기준에서는 반드시 해당 기준에 제시된 네 점수 중 하나만 선택한다.
-5. 작성 횟수 기준은 AI가 평가하지 않는다. 프로그램이 실제 제출 횟수로 계산한다.
-6. AI 평가는 최종 성적이 아니라 교사가 검토할 수 있는 추천 평가이다.
-7. 평가 근거에는 학생 기록에서 확인되는 구체적인 내용이 포함되어야 한다.
+3. 평가기준에 없는 요소를 임의로 평가하지 않는다.
+4. 각 평가 기준에서는 반드시 제시된 점수 중 하나만 선택한다.
+5. 작성 횟수 평가는 하지 않는다.
+6. 작성 횟수는 프로그램이 실제 제출 횟수로 계산한다.
+7. 평가 근거에는 학생 기록에서 확인되는 구체적인 내용을 포함한다.
 8. 근거 없는 칭찬이나 비판을 하지 않는다.
+9. 학생의 누적 기록 전체를 종합해서 판단한다.
+10. AI 평가는 교사의 최종 평가를 대신하지 않고 교사가 검토할 추천 평가이다.
 
-선택된 평가 루브릭:
+평가 루브릭:
+
 {rubric_text}
 """
 
     user_prompt = f"""
-학생 이름: {student_name}
+학생 이름:
+{student_name}
 
-이 학생의 누적 독서 포트폴리오 기록:
+학생의 누적 독서 포트폴리오:
+
 {records_text}
 
-위 자료를 선택된 루브릭에 따라 평가하라.
-각 기준별 점수와 평가 근거를 제시하라.
-종합피드백은 교사가 평가 결과를 참고할 수 있는 형태로 작성한다.
+위 학생의 누적 기록을 평가 루브릭에 따라 평가하라.
+
+각 평가 기준별로:
+- 점수
+- 구체적인 평가 근거
+
+를 작성하라.
+
+마지막에는 학생에게 도움이 될 수 있는
+종합 피드백을 작성하라.
 """
 
-    # 현재 portfolio_scores 구조는 3개의 AI 평가 영역을 저장하므로,
-    # setting의 첫 3개 비-작성횟수 기준을 기존 저장 칸과 연결합니다.
-    criteria = criteria_rows[:3]
-    if len(criteria) < 3:
-        raise Exception(
-            "현재 portfolio_scores 구조는 AI 평가 기준을 3개 저장합니다. "
-            "setting 시트에는 작성 횟수를 제외한 AI 평가 기준이 최소 3개 필요합니다."
-        )
+    # ========================================================
+    # 점수 선택지
+    # ========================================================
 
     score_enums = []
-    for row in criteria:
-        options = rubric_score_options(row)
+
+    for row in criteria_rows:
+
+        options = rubric_score_options(
+            row
+        )
+
         if not options:
+
             raise Exception(
-                f"'{safe_str(row.get('평가기준'))}'의 점수 설정을 확인해 주세요."
+                f"'{safe_str(row.get('평가기준'))}'의 "
+                "점수 설정을 확인해 주세요."
             )
-        score_enums.append([str(v) for v in options])
 
-    key_defs = [
-        ("기준1_점수", score_enums[0]),
-        ("기준2_점수", score_enums[1]),
-        ("기준3_점수", score_enums[2]),
-        ("기준1_근거", None),
-        ("기준2_근거", None),
-        ("기준3_근거", None),
-        ("종합피드백", None),
-    ]
+        score_enums.append(
+            [str(v) for v in options]
+        )
 
-    properties = {}
-    for key, enum_values in key_defs:
-        if enum_values is None:
-            properties[key] = {"type": "STRING"}
-        else:
-            properties[key] = {"type": "STRING", "enum": enum_values}
+    # ========================================================
+    # JSON Schema
+    # ========================================================
 
     schema = {
         "type": "OBJECT",
-        "properties": properties,
-        "required": list(properties.keys())
+        "properties": {
+            "기준1_점수": {
+                "type": "STRING",
+                "enum": score_enums[0]
+            },
+            "기준2_점수": {
+                "type": "STRING",
+                "enum": score_enums[1]
+            },
+            "기준3_점수": {
+                "type": "STRING",
+                "enum": score_enums[2]
+            },
+            "기준1_근거": {
+                "type": "STRING"
+            },
+            "기준2_근거": {
+                "type": "STRING"
+            },
+            "기준3_근거": {
+                "type": "STRING"
+            },
+            "종합피드백": {
+                "type": "STRING"
+            }
+        },
+        "required": [
+            "기준1_점수",
+            "기준2_점수",
+            "기준3_점수",
+            "기준1_근거",
+            "기준2_근거",
+            "기준3_근거",
+            "종합피드백"
+        ]
     }
 
     config = types.GenerateContentConfig(
@@ -996,71 +1245,105 @@ def run_ai_evaluation(student_name, book_records, rubric_df):
         response_schema=schema
     )
 
-    contents = [system_prompt, user_prompt]
+    contents = [
+        system_prompt,
+        user_prompt
+    ]
 
-    def generate_with_retry(model_name, attempts=4):
-        last_error = None
-        for attempt in range(attempts):
-            try:
-                return client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=config
-                )
-            except Exception as e:
-                last_error = e
-                error_text = str(e)
-                is_retryable = (
-                    "503" in error_text
-                    or "UNAVAILABLE" in error_text
-                    or "service_unavailable" in error_text
-                )
-                if not is_retryable or attempt >= attempts - 1:
-                    raise
-                time.sleep(3 * (2 ** attempt))
-        raise last_error
+    # ========================================================
+    # Gemini 호출
+    # ========================================================
+
+    response = gemini_generate_json(
+        client=client,
+        model_name=GEMINI_MODEL,
+        contents=contents,
+        config=config
+    )
+
+    # ========================================================
+    # JSON 파싱
+    # ========================================================
 
     try:
-        response = generate_with_retry(GEMINI_MODEL)
-    except Exception as primary_error:
-        primary_text = str(primary_error)
-        if (
-            "503" in primary_text
-            or "UNAVAILABLE" in primary_text
-            or "service_unavailable" in primary_text
-        ):
-            response = generate_with_retry(GEMINI_FALLBACK_MODEL, attempts=2)
-        else:
-            raise
 
-    if not response.text:
-        raise Exception("Gemini가 빈 응답을 반환했습니다.")
+        result = json.loads(
+            response.text
+        )
 
-    result = json.loads(response.text)
+    except Exception as e:
+
+        raise Exception(
+            "Gemini의 평가 결과를 JSON으로 변환하지 못했습니다.\n"
+            f"원본 응답: {response.text[:1000]}\n"
+            f"오류: {e}"
+        )
+
+    # ========================================================
+    # 점수 검증
+    # ========================================================
 
     scores = []
-    for idx, row in enumerate(criteria, start=1):
-        value = int(result[f"기준{idx}_점수"])
-        allowed = set(rubric_score_options(row))
-        if value not in allowed:
-            raise Exception(
-                f"Gemini 평가 점수가 루브릭과 일치하지 않습니다: {value}"
+
+    for idx, row in enumerate(
+        criteria_rows,
+        start=1
+    ):
+
+        key = f"기준{idx}_점수"
+
+        try:
+
+            value = int(
+                result[key]
             )
+
+        except Exception:
+
+            raise Exception(
+                f"Gemini가 '{key}'에 올바른 점수를 반환하지 않았습니다."
+            )
+
+        allowed = set(
+            rubric_score_options(row)
+        )
+
+        if value not in allowed:
+
+            raise Exception(
+                f"Gemini 평가 점수 {value}점이 "
+                f"'{safe_str(row.get('평가기준'))}'의 "
+                f"루브릭 점수와 일치하지 않습니다.\n"
+                f"허용 점수: {sorted(allowed)}"
+            )
+
         scores.append(value)
+
+    # ========================================================
+    # 결과 반환
+    # ========================================================
 
     return {
         "understanding": scores[0],
+
         "completeness": scores[1],
+
         "depth": scores[2],
+
         "reason": (
-            f"① {safe_str(criteria[0].get('평가기준'))}\n"
-            f"{result['기준1_근거']}\n\n"
-            f"② {safe_str(criteria[1].get('평가기준'))}\n"
-            f"{result['기준2_근거']}\n\n"
-            f"③ {safe_str(criteria[2].get('평가기준'))}\n"
-            f"{result['기준3_근거']}"
+            f"① {safe_str(criteria_rows[0].get('평가기준'))}\n"
+            f"{safe_str(result.get('기준1_근거'))}\n\n"
+
+            f"② {safe_str(criteria_rows[1].get('평가기준'))}\n"
+            f"{safe_str(result.get('기준2_근거'))}\n\n"
+
+            f"③ {safe_str(criteria_rows[2].get('평가기준'))}\n"
+            f"{safe_str(result.get('기준3_근거'))}"
         ),
-        "feedback": result["종합피드백"]
+
+        "feedback": safe_str(
+            result.get("종합피드백")
+        )
     }
 
 
