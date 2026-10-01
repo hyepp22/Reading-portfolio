@@ -110,7 +110,8 @@ SCORE_HEADERS = [
     "AI_평가근거",
     "AI_종합피드백",
     "교사_피드백",
-    "평가일"
+    "평가일",
+    "평가설정ID"
 ]
 
 
@@ -485,36 +486,199 @@ def safe_str(value):
     return str(value)
 
 
-def get_submission_score(count):
-    """
-    ④ 작성 횟수 점수
+def normalize_grade_value(value):
+    """setting 시트의 1/2/3과 학생 시트의 1학년/2학년/3학년을 비교 가능하게 합니다."""
+    text = safe_str(value).strip()
+    if text.endswith("학년"):
+        text = text[:-2]
+    return text
 
-    15회 이상 : 25점
-    12~14회  : 20점
-    9~11회   : 15점
-    8회 이하 : 10점
-    """
 
-    if count >= 15:
-        return 25
-    elif count >= 12:
-        return 20
-    elif count >= 9:
-        return 15
-    else:
+@st.cache_data(ttl=30, show_spinner=False)
+def read_evaluation_settings():
+    """setting 시트의 평가 루브릭을 읽습니다."""
+    records = read_sheet_records("setting")
+    if not records:
+        return pd.DataFrame()
+    df = pd.DataFrame(records)
+    df.columns = [
+        str(c).replace("\ufeff", "").strip()
+        for c in df.columns
+    ]
+    required = [
+        "평가ID", "학년도", "학기", "학년", "평가명", "총차시",
+        "기준ID", "평가기준", "배점",
+        "매우우수점수", "우수점수", "보통점수", "노력요함점수",
+        "매우우수 설명", "우수 설명", "보통 설명", "노력요함 설명"
+    ]
+    for col in required:
+        if col not in df.columns:
+            df[col] = ""
+    return df[required].copy()
+
+
+def get_assessment_list():
+    """setting 시트에서 평가ID 단위의 평가 목록을 반환합니다."""
+    df = read_evaluation_settings()
+    if df.empty:
+        return []
+    result = []
+    seen = set()
+    for _, row in df.iterrows():
+        assessment_id = safe_str(row["평가ID"]).strip()
+        if not assessment_id or assessment_id in seen:
+            continue
+        seen.add(assessment_id)
+        result.append({
+            "평가ID": assessment_id,
+            "학년도": safe_str(row["학년도"]),
+            "학기": safe_str(row["학기"]),
+            "학년": safe_str(row["학년"]),
+            "평가명": safe_str(row["평가명"]),
+            "총차시": safe_str(row["총차시"]),
+        })
+    return result
+
+
+def get_assessment_rubric(assessment_id):
+    """선택한 평가ID에 해당하는 루브릭 행만 반환합니다."""
+    df = read_evaluation_settings()
+    if df.empty:
+        return pd.DataFrame()
+    return df[
+        df["평가ID"].astype(str).str.strip()
+        == str(assessment_id).strip()
+    ].copy()
+
+
+def rubric_score_options(row):
+    """루브릭 행의 네 수준 점수를 숫자 목록으로 반환합니다."""
+    values = []
+    for col in ["매우우수점수", "우수점수", "보통점수", "노력요함점수"]:
+        try:
+            value = int(float(safe_str(row.get(col)).strip()))
+            if value not in values:
+                values.append(value)
+        except Exception:
+            pass
+    return values
+
+
+def get_submission_criterion(rubric_df):
+    """평가기준 중 작성 횟수 기준을 찾습니다."""
+    if rubric_df is None or rubric_df.empty:
+        return None
+    for _, row in rubric_df.iterrows():
+        criterion = safe_str(row.get("평가기준")).strip()
+        if "작성 횟수" in criterion or "작성횟수" in criterion:
+            return row
+    return None
+
+
+def get_submission_score(count, rubric_df):
+    """setting 시트의 작성 횟수 루브릭으로 자동 점수를 계산합니다."""
+    row = get_submission_criterion(rubric_df)
+    if row is None:
+        # 기존 평가 데이터와의 호환을 위한 기본값
+        if count >= 15:
+            return 25
+        elif count >= 12:
+            return 20
+        elif count >= 9:
+            return 15
         return 10
 
+    total_sessions = 0
+    try:
+        total_sessions = int(float(safe_str(row.get("총차시")) or 0))
+    except Exception:
+        pass
 
-def get_submission_level(count):
+    if not total_sessions:
+        try:
+            total_sessions = int(float(safe_str(
+                rubric_df.iloc[0].get("총차시")
+            ) or 0))
+        except Exception:
+            total_sessions = 0
 
-    if count >= 15:
-        return "매우 우수"
-    elif count >= 12:
-        return "우수"
-    elif count >= 9:
-        return "보통"
-    else:
+    missing = max(total_sessions - count, 0)
+
+    # 작성 횟수 설명은 '15회 이상', '1~2회 누락', '3~4회 누락',
+    # '5회이상 누락'처럼 작성하는 현재 setting 형식을 기준으로 계산합니다.
+    levels = [
+        ("매우 우수", "매우우수점수", safe_str(row.get("매우우수 설명"))),
+        ("우수", "우수점수", safe_str(row.get("우수 설명"))),
+        ("보통", "보통점수", safe_str(row.get("보통 설명"))),
+        ("노력 요함", "노력요함점수", safe_str(row.get("노력요함 설명"))),
+    ]
+
+    def score_of(col):
+        try:
+            return int(float(safe_str(row.get(col))))
+        except Exception:
+            return 0
+
+    # '회 이상' 기준
+    if total_sessions and count >= total_sessions:
+        return score_of("매우우수점수")
+
+    # 누락 횟수 범위를 설명에서 추출
+    import re
+    for label, score_col, desc in levels[1:]:
+        m = re.search(r"(\d+)\s*[~～-]\s*(\d+)\s*회\s*누락", desc)
+        if m and int(m.group(1)) <= missing <= int(m.group(2)):
+            return score_of(score_col)
+
+        m = re.search(r"(\d+)\s*회\s*이상\s*누락", desc)
+        if m and missing >= int(m.group(1)):
+            return score_of(score_col)
+
+    # 설명에 범위가 없는 경우에는 기본적으로 네 수준의 순서를 사용
+    # (총차시 기준으로 0회, 1~2회, 3~4회, 그 이상 누락)
+    scores = {
+        "매우 우수": score_of("매우우수점수"),
+        "우수": score_of("우수점수"),
+        "보통": score_of("보통점수"),
+        "노력 요함": score_of("노력요함점수"),
+    }
+    if missing <= 0:
+        return scores["매우 우수"]
+    if missing <= 2:
+        return scores["우수"]
+    if missing <= 4:
+        return scores["보통"]
+    return scores["노력 요함"]
+
+
+def get_submission_level(count, rubric_df):
+    row = get_submission_criterion(rubric_df)
+    score = get_submission_score(count, rubric_df)
+    if row is None:
+        if count >= 15:
+            return "매우 우수"
+        elif count >= 12:
+            return "우수"
+        elif count >= 9:
+            return "보통"
         return "노력 요함"
+
+    total_sessions = 0
+    try:
+        total_sessions = int(float(safe_str(
+            rubric_df.iloc[0].get("총차시")
+        ) or 0))
+    except Exception:
+        pass
+    missing = max(total_sessions - count, 0)
+
+    if total_sessions and count >= total_sessions:
+        return "매우 우수"
+    if missing <= 2:
+        return "우수"
+    if missing <= 4:
+        return "보통"
+    return "노력 요함"
 
 
 def make_evaluation_id(grade, class_name, student_id):
@@ -543,10 +707,12 @@ def ensure_score_sheet():
     missing = [h for h in SCORE_HEADERS if h not in normalized_headers]
 
     if missing:
-        st.warning(
-            "⚠️ portfolio_scores 시트의 1행 제목을 확인해 주세요.\n\n"
-            f"확인되지 않은 제목: {', '.join(missing)}"
-        )
+        # 새 열은 기존 데이터를 건드리지 않고 오른쪽에 추가합니다.
+        current_count = len(current_headers)
+        for header in missing:
+            ws.update_cell(1, current_count + 1, header)
+            current_count += 1
+        read_sheet_headers.clear()
 
     return ws
 
@@ -579,6 +745,7 @@ def normalize_header_names(headers):
         "AI종합피드백": "AI_종합피드백",
         "교사피드백": "교사_피드백",
         "평가일": "평가일",
+        "평가설정ID": "평가설정ID",
     }
 
     result = []
@@ -609,7 +776,7 @@ def normalize_score_dataframe(df):
     return df[SCORE_HEADERS].copy()
 
 
-def find_existing_evaluation(ws, evaluation_id):
+def find_existing_evaluation(ws, evaluation_id, assessment_id=None):
 
     records = read_sheet_records("portfolio_scores")
 
@@ -624,6 +791,12 @@ def find_existing_evaluation(ws, evaluation_id):
         df["평가ID"].astype(str).str.strip() == str(evaluation_id).strip()
     ]
 
+    if assessment_id:
+        matches = matches[
+            matches["평가설정ID"].astype(str).str.strip()
+            == str(assessment_id).strip()
+        ]
+
     if matches.empty:
         return None, None
 
@@ -636,18 +809,13 @@ def find_existing_evaluation(ws, evaluation_id):
 # 6. AI 평가 함수
 # ============================================================
 
-def run_ai_evaluation(student_name, book_records):
+def run_ai_evaluation(student_name, book_records, rubric_df):
+    """setting 시트의 선택된 평가 루브릭을 사용해 AI 평가를 실행합니다."""
 
     client = get_gemini_client()
 
-    # --------------------------------------------------------
-    # 학생의 누적 기록을 AI가 읽을 수 있는 형태로 변환
-    # --------------------------------------------------------
-
     records_text = ""
-
     for i, row in enumerate(book_records, start=1):
-
         records_text += f"""
 ========================
 제출 기록 {i}
@@ -679,153 +847,117 @@ def run_ai_evaluation(student_name, book_records):
 
 느낀점:
 {safe_str(row.get("느낀점"))}
-
 """
 
-    # --------------------------------------------------------
-    # 루브릭
-    # --------------------------------------------------------
+    if rubric_df is None or rubric_df.empty:
+        raise Exception("선택된 평가의 루브릭을 setting 시트에서 찾을 수 없습니다.")
 
-    rubric = """
-[1. 내용의 이해도 / 25점]
+    # 작성 횟수 기준은 프로그램이 실제 제출 횟수로 계산하므로
+    # 내용 분석이 필요한 기준만 AI에게 전달합니다.
+    criteria_rows = []
+    for _, row in rubric_df.iterrows():
+        criterion = safe_str(row.get("평가기준")).strip()
+        if "작성 횟수" in criterion or "작성횟수" in criterion:
+            continue
+        criteria_rows.append(row)
 
-25점 - 매우 우수
-글의 핵심 내용과 인물의 심리 및 사건의 인과관계를
-정확하고 깊이 있게 이해하여 왜곡 없이 요약함.
+    if not criteria_rows:
+        raise Exception("AI가 평가할 루브릭 기준이 없습니다.")
 
-20점 - 우수
-글의 대체적인 흐름과 중요 사건을 바르게 파악하고
-요약하였으나, 일부 세부 맥락의 서술이 다소 평이함.
+    rubric_parts = []
+    for idx, row in enumerate(criteria_rows, start=1):
+        criterion = safe_str(row.get("평가기준"))
+        max_score = safe_str(row.get("배점"))
+        rubric_parts.append(
+            f"""[{idx}. {criterion} / 배점 {max_score}점]
 
-15점 - 보통
-글의 표면적인 줄거리는 파악하였으나,
-핵심 주제나 인물 간의 관계 이해가 다소 피상적임.
+매우 우수 ({safe_str(row.get("매우우수점수"))}점):
+{safe_str(row.get("매우우수 설명"))}
 
-10점 - 노력 요함
-읽은 부분의 줄거리 요약이 누락되었거나
-책의 전개 내용과 일치하지 않는 부분이 많음.
+우수 ({safe_str(row.get("우수점수"))}점):
+{safe_str(row.get("우수 설명"))}
 
+보통 ({safe_str(row.get("보통점수"))}점):
+{safe_str(row.get("보통 설명"))}
 
-[2. 작성의 충실도 / 25점]
-
-25점 - 매우 우수
-요약, 인상 깊은 문장, 질문과 답변, 생각과 느낌 등
-모든 항목을 분량 기준에 맞추어 성실하고 구체적으로 작성함.
-
-20점 - 우수
-모든 필수 항목을 빠짐없이 작성하였으나,
-일부 항목의 서술 분량이 다소 간략함.
-
-15점 - 보통
-필수 항목 중 1~2개 항목의 내용이 형식적으로 작성되었거나
-글자 수가 부족함.
-
-10점 - 노력 요함
-항목의 미작성이 있거나 단답형으로 작성되어
-성실도가 현저히 부족함.
-
-
-[3. 감상의 깊이 / 25점]
-
-25점 - 매우 우수
-작품의 내용을 자신의 삶, 학교생활, 사회적 이슈와
-창의적·비판적으로 연결하여 성찰적 생각을 심도 있게 서술함.
-
-20점 - 우수
-자신의 솔직한 느낌과 생각을 진솔하게 드러내었으나,
-일반적인 교훈 수준에 머물러 독창성이 약간 아쉬움.
-
-15점 - 보통
-단순한 재미나 단편적 인상 위주로 감상을 기술하여
-성찰이 부족함.
-
-10점 - 노력 요함
-감상과 느낌이 한 줄 이하이거나
-줄거리의 단순 반복으로 구성되어 독창적 감상을 찾기 어려움.
+노력 요함 ({safe_str(row.get("노력요함점수"))}점):
+{safe_str(row.get("노력요함 설명"))}
 """
+        )
 
-    # --------------------------------------------------------
-    # Gemini에게 줄 지시
-    # --------------------------------------------------------
+    rubric_text = "\n".join(rubric_parts)
 
     system_prompt = f"""
 너는 중학교 국어 교사의 독서 포트폴리오 수행평가를
 보조하는 평가 AI이다.
 
-학생의 전체 누적 독서 기록을 바탕으로 교사의 루브릭에 따라
-평가 점수를 '추천'한다.
+학생의 전체 누적 독서 기록을 아래의 '선택된 평가 루브릭'에
+따라 평가 점수를 추천한다.
 
 중요한 원칙:
-
 1. 학생의 실제 작성 내용에 근거해서만 판단한다.
 2. 기록에 없는 내용을 추측하지 않는다.
-3. 학생의 글쓰기 능력 자체보다 제시된 루브릭의 기준을 적용한다.
-4. 점수는 반드시 10, 15, 20, 25 중 하나만 사용한다.
-5. 4번 '작성 횟수'는 AI가 평가하지 않는다.
-6. 4번 작성 횟수는 프로그램이 실제 제출 횟수로 계산한다.
-7. AI의 평가는 최종 성적이 아니라 교사가 검토할 수 있는
-   '추천 평가'이다.
-8. 평가 근거는 학생이 실제로 작성한 내용에 근거하여 구체적으로 작성한다.
-9. 근거 없는 칭찬이나 비판은 하지 않는다.
+3. 학생의 글쓰기 능력 자체가 아니라 제시된 평가기준을 적용한다.
+4. 각 기준에서는 반드시 해당 기준에 제시된 네 점수 중 하나만 선택한다.
+5. 작성 횟수 기준은 AI가 평가하지 않는다. 프로그램이 실제 제출 횟수로 계산한다.
+6. AI 평가는 최종 성적이 아니라 교사가 검토할 수 있는 추천 평가이다.
+7. 평가 근거에는 학생 기록에서 확인되는 구체적인 내용이 포함되어야 한다.
+8. 근거 없는 칭찬이나 비판을 하지 않는다.
 
-{rubric}
+선택된 평가 루브릭:
+{rubric_text}
 """
 
     user_prompt = f"""
 학생 이름: {student_name}
 
-이 학생의 누적 독서 포트폴리오 기록은 다음과 같다.
-
+이 학생의 누적 독서 포트폴리오 기록:
 {records_text}
 
-위 자료를 바탕으로 1~3번 영역을 평가하라.
-
-각 영역은 반드시 10, 15, 20, 25 중 하나의 점수를 선택하라.
-
-종합피드백은 학생에게 직접 말하는 것이 아니라
-교사가 평가 결과를 참고할 수 있는 형태로 작성한다.
+위 자료를 선택된 루브릭에 따라 평가하라.
+각 기준별 점수와 평가 근거를 제시하라.
+종합피드백은 교사가 평가 결과를 참고할 수 있는 형태로 작성한다.
 """
 
-    # Gemini 구조화 출력용 JSON Schema
-    # Google 공식 Gemini API는 response_mime_type과
-    # response_schema를 사용해 JSON 형식 출력을 지원합니다.
+    # 현재 portfolio_scores 구조는 3개의 AI 평가 영역을 저장하므로,
+    # setting의 첫 3개 비-작성횟수 기준을 기존 저장 칸과 연결합니다.
+    criteria = criteria_rows[:3]
+    if len(criteria) < 3:
+        raise Exception(
+            "현재 portfolio_scores 구조는 AI 평가 기준을 3개 저장합니다. "
+            "setting 시트에는 작성 횟수를 제외한 AI 평가 기준이 최소 3개 필요합니다."
+        )
+
+    score_enums = []
+    for row in criteria:
+        options = rubric_score_options(row)
+        if not options:
+            raise Exception(
+                f"'{safe_str(row.get('평가기준'))}'의 점수 설정을 확인해 주세요."
+            )
+        score_enums.append([str(v) for v in options])
+
+    key_defs = [
+        ("기준1_점수", score_enums[0]),
+        ("기준2_점수", score_enums[1]),
+        ("기준3_점수", score_enums[2]),
+        ("기준1_근거", None),
+        ("기준2_근거", None),
+        ("기준3_근거", None),
+        ("종합피드백", None),
+    ]
+
+    properties = {}
+    for key, enum_values in key_defs:
+        if enum_values is None:
+            properties[key] = {"type": "STRING"}
+        else:
+            properties[key] = {"type": "STRING", "enum": enum_values}
+
     schema = {
         "type": "OBJECT",
-        "properties": {
-            "내용이해_점수": {
-                "type": "STRING",
-                "enum": ["10", "15", "20", "25"]
-            },
-            "작성충실도_점수": {
-                "type": "STRING",
-                "enum": ["10", "15", "20", "25"]
-            },
-            "감상의깊이_점수": {
-                "type": "STRING",
-                "enum": ["10", "15", "20", "25"]
-            },
-            "내용이해_근거": {
-                "type": "STRING"
-            },
-            "작성충실도_근거": {
-                "type": "STRING"
-            },
-            "감상의깊이_근거": {
-                "type": "STRING"
-            },
-            "종합피드백": {
-                "type": "STRING"
-            }
-        },
-        "required": [
-            "내용이해_점수",
-            "작성충실도_점수",
-            "감상의깊이_점수",
-            "내용이해_근거",
-            "작성충실도_근거",
-            "감상의깊이_근거",
-            "종합피드백"
-        ]
+        "properties": properties,
+        "required": list(properties.keys())
     }
 
     config = types.GenerateContentConfig(
@@ -833,14 +965,10 @@ def run_ai_evaluation(student_name, book_records):
         response_schema=schema
     )
 
-    contents = [
-        system_prompt,
-        user_prompt
-    ]
+    contents = [system_prompt, user_prompt]
 
     def generate_with_retry(model_name, attempts=4):
         last_error = None
-
         for attempt in range(attempts):
             try:
                 return client.models.generate_content(
@@ -848,69 +976,61 @@ def run_ai_evaluation(student_name, book_records):
                     contents=contents,
                     config=config
                 )
-
             except Exception as e:
                 last_error = e
                 error_text = str(e)
-
-                # 503 UNAVAILABLE처럼 일시적인 서버 과부하만 재시도
                 is_retryable = (
                     "503" in error_text
                     or "UNAVAILABLE" in error_text
                     or "service_unavailable" in error_text
                 )
-
                 if not is_retryable or attempt >= attempts - 1:
                     raise
-
-                # 3초 → 6초 → 12초로 대기 시간을 늘림
-                delay = 3 * (2 ** attempt)
-                time.sleep(delay)
-
+                time.sleep(3 * (2 ** attempt))
         raise last_error
 
     try:
-        # 우선 Gemini 3.6 Flash로 시도
         response = generate_with_retry(GEMINI_MODEL)
-
     except Exception as primary_error:
         primary_text = str(primary_error)
-
-        # 3.6 Flash가 일시적으로 503이면 3.5 Flash-Lite로 한 번 전환
         if (
             "503" in primary_text
             or "UNAVAILABLE" in primary_text
             or "service_unavailable" in primary_text
         ):
-            response = generate_with_retry(
-                GEMINI_FALLBACK_MODEL,
-                attempts=2
-            )
+            response = generate_with_retry(GEMINI_FALLBACK_MODEL, attempts=2)
         else:
             raise
 
     if not response.text:
-        raise Exception(
-            "Gemini가 빈 응답을 반환했습니다."
-        )
+        raise Exception("Gemini가 빈 응답을 반환했습니다.")
 
     result = json.loads(response.text)
 
-    # 구조화 출력이더라도 애플리케이션에서 한 번 더 검증
-    allowed_scores = {10, 15, 20, 25}
-
-    for key in [
-        "내용이해_점수",
-        "작성충실도_점수",
-        "감상의깊이_점수"
-    ]:
-        if int(result[key]) not in allowed_scores:
+    scores = []
+    for idx, row in enumerate(criteria, start=1):
+        value = int(result[f"기준{idx}_점수"])
+        allowed = set(rubric_score_options(row))
+        if value not in allowed:
             raise Exception(
-                f"Gemini 평가 점수가 올바르지 않습니다: {result[key]}"
+                f"Gemini 평가 점수가 루브릭과 일치하지 않습니다: {value}"
             )
-        result[key] = int(result[key])
+        scores.append(value)
 
-    return result
+    return {
+        "understanding": scores[0],
+        "completeness": scores[1],
+        "depth": scores[2],
+        "reason": (
+            f"① {safe_str(criteria[0].get('평가기준'))}\n"
+            f"{result['기준1_근거']}\n\n"
+            f"② {safe_str(criteria[1].get('평가기준'))}\n"
+            f"{result['기준2_근거']}\n\n"
+            f"③ {safe_str(criteria[2].get('평가기준'))}\n"
+            f"{result['기준3_근거']}"
+        ),
+        "feedback": result["종합피드백"]
+    }
 
 
 # ============================================================
@@ -936,7 +1056,8 @@ def save_evaluation(
     final_score,
     ai_reason,
     ai_feedback,
-    teacher_feedback
+    teacher_feedback,
+    assessment_id=""
 ):
 
     now = datetime.now().strftime(
@@ -962,12 +1083,14 @@ def save_evaluation(
         ai_reason,
         ai_feedback,
         teacher_feedback,
-        now
+        now,
+        assessment_id
     ]
 
     existing, row_index = find_existing_evaluation(
         ws,
-        evaluation_id
+        evaluation_id,
+        assessment_id
     )
 
     if row_index is None:
@@ -980,7 +1103,7 @@ def save_evaluation(
     else:
 
         ws.update(
-            f"A{row_index}:S{row_index}",
+            f"A{row_index}:T{row_index}",
             [row_values],
             value_input_option="USER_ENTERED"
         )
@@ -1871,6 +1994,116 @@ else:
         st.rerun()
 
     # --------------------------------------------------------
+    # 교사 메뉴
+    # --------------------------------------------------------
+
+    teacher_menu = st.sidebar.radio(
+        "관리 메뉴",
+        ["📊 평가 관리", "⚙️ 평가 설정"],
+        key="teacher_menu"
+    )
+
+    try:
+        assessment_list = get_assessment_list()
+    except Exception as e:
+        st.error(f"평가 설정 시트를 읽을 수 없습니다: {e}")
+        st.stop()
+
+    if teacher_menu == "⚙️ 평가 설정":
+        st.markdown("### ⚙️ 평가 설정")
+        st.caption(
+            "Google Sheet의 'setting' 시트를 기준으로 학년도·학기·학년별 평가 루브릭을 관리합니다. "
+            "이 화면에서 확인한 평가가 AI 자동 채점에 그대로 적용됩니다."
+        )
+
+        if not assessment_list:
+            st.error(
+                "setting 시트에 평가 설정이 없습니다. "
+                "평가ID부터 루브릭 기준까지 입력해 주세요."
+            )
+            st.stop()
+
+        setting_df = read_evaluation_settings()
+
+        for item in assessment_list:
+            with st.expander(
+                f"📚 {item['평가ID']} · {item['평가명']} "
+                f"({item['학년도']}학년도 {item['학기']}학기 / {item['학년']}학년)",
+                expanded=False
+            ):
+                st.write(
+                    f"**총차시:** {item['총차시']}차시"
+                )
+                rubric_view = setting_df[
+                    setting_df["평가ID"].astype(str).str.strip()
+                    == item["평가ID"]
+                ].copy()
+
+                show_cols = [
+                    "기준ID", "평가기준", "배점",
+                    "매우우수점수", "우수점수", "보통점수", "노력요함점수",
+                    "매우우수 설명", "우수 설명", "보통 설명", "노력요함 설명"
+                ]
+                st.dataframe(
+                    rubric_view[show_cols],
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+        st.info(
+            "💡 루브릭 내용을 변경할 때는 Google Sheet의 'setting' 시트만 수정하면 됩니다. "
+            "app.py의 AI 프롬프트를 학년도별로 다시 수정할 필요가 없습니다."
+        )
+        st.stop()
+
+    # --------------------------------------------------------
+    # 현재 사용할 평가 선택
+    # --------------------------------------------------------
+
+    if not assessment_list:
+        st.error(
+            "setting 시트에 평가 설정이 없습니다. "
+            "교사 → 평가 설정 메뉴에서 먼저 확인해 주세요."
+        )
+        st.stop()
+
+    assessment_labels = []
+    assessment_map = {}
+    for item in assessment_list:
+        label = (
+            f"{item['평가ID']} | {item['평가명']} | "
+            f"{item['학년도']}학년도 {item['학기']}학기 | "
+            f"{item['학년']}학년 | {item['총차시']}차시"
+        )
+        assessment_labels.append(label)
+        assessment_map[label] = item
+
+    saved_assessment = st.session_state.get("active_assessment_label")
+    if saved_assessment not in assessment_labels:
+        saved_assessment = assessment_labels[0]
+
+    active_assessment_label = st.sidebar.selectbox(
+        "현재 평가",
+        assessment_labels,
+        index=assessment_labels.index(saved_assessment),
+        key="active_assessment_label"
+    )
+    active_assessment = assessment_map[active_assessment_label]
+    active_assessment_id = active_assessment["평가ID"]
+    active_rubric = get_assessment_rubric(active_assessment_id)
+
+    if active_rubric.empty:
+        st.error(
+            f"선택한 평가ID '{active_assessment_id}'의 루브릭을 찾을 수 없습니다."
+        )
+        st.stop()
+
+    st.sidebar.caption(
+        f"📌 적용 루브릭: {active_assessment['평가명']} / "
+        f"{active_assessment['학년도']}-{active_assessment['학기']}"
+    )
+
+    # --------------------------------------------------------
     # 데이터 불러오기
     # --------------------------------------------------------
 
@@ -1945,7 +2178,8 @@ else:
 
         completed_evaluations = len(
             df_scores[
-                df_scores["최종점수"].astype(str).str.strip() != ""
+                (df_scores["최종점수"].astype(str).str.strip() != "") &
+                (df_scores["평가설정ID"].astype(str).str.strip() == active_assessment_id)
             ]
         )
 
@@ -1984,6 +2218,12 @@ else:
         )
 
     st.divider()
+
+    st.info(
+        f"📚 현재 적용 평가: **{active_assessment['평가명']}** · "
+        f"{active_assessment['학년도']}학년도 {active_assessment['학기']}학기 · "
+        f"{active_assessment['학년']}학년 · 총 {active_assessment['총차시']}차시"
+    )
 
     # ========================================================
     # 필터
@@ -2122,7 +2362,8 @@ else:
 
             class_scores = df_scores[
                 (df_scores["학년"].astype(str) == str(selected_grade)) &
-                (df_scores["반"].astype(str) == str(selected_class))
+                (df_scores["반"].astype(str) == str(selected_class)) &
+                (df_scores["평가설정ID"].astype(str).str.strip() == active_assessment_id)
             ].copy()
 
             if not class_scores.empty:
@@ -2160,7 +2401,8 @@ else:
 
             class_scores = df_scores[
                 (df_scores["학년"].astype(str) == str(selected_grade)) &
-                (df_scores["반"].astype(str) == str(selected_class))
+                (df_scores["반"].astype(str) == str(selected_class)) &
+                (df_scores["평가설정ID"].astype(str).str.strip() == active_assessment_id)
             ].copy()
 
             if not class_scores.empty:
@@ -2338,8 +2580,8 @@ else:
                 if not df_scores.empty:
 
                     score_match = df_scores[
-                        df_scores["평가ID"].astype(str)
-                        == evaluation_id
+                        (df_scores["평가ID"].astype(str).str.strip() == evaluation_id) &
+                        (df_scores["평가설정ID"].astype(str).str.strip() == active_assessment_id)
                     ]
 
                     if not score_match.empty:
@@ -2367,7 +2609,7 @@ else:
                         "학년": grade,
                         "반": class_name,
                         "작성 횟수": count,
-                        "작성 점수": get_submission_score(count),
+                        "작성 점수": get_submission_score(count, active_rubric),
                         "최종 점수": final_score,
                         "상태": status
                     }
@@ -2456,11 +2698,13 @@ else:
         )
 
         automatic_count_score = get_submission_score(
-            submission_count
+            submission_count,
+            active_rubric
         )
 
         count_level = get_submission_level(
-            submission_count
+            submission_count,
+            active_rubric
         )
 
         # --------------------------------------------------------
@@ -2469,7 +2713,8 @@ else:
 
         existing_evaluation, existing_row_index = find_existing_evaluation(
             ws_scores,
-            evaluation_id
+            evaluation_id,
+            active_assessment_id
         )
 
         # ========================================================
@@ -2498,22 +2743,26 @@ else:
 
         with header_right:
 
-            if submission_count >= 15:
+            count_level = get_submission_level(
+                submission_count,
+                active_rubric
+            )
 
+            if count_level == "매우 우수":
                 st.success(
-                    f"작성 횟수 {submission_count}회"
+                    f"작성 횟수 {submission_count}회 · {count_level}"
                 )
-
-            elif submission_count >= 9:
-
+            elif count_level == "우수":
+                st.success(
+                    f"작성 횟수 {submission_count}회 · {count_level}"
+                )
+            elif count_level == "보통":
                 st.warning(
-                    f"작성 횟수 {submission_count}회"
+                    f"작성 횟수 {submission_count}회 · {count_level}"
                 )
-
             else:
-
                 st.error(
-                    f"작성 횟수 {submission_count}회"
+                    f"작성 횟수 {submission_count}회 · {count_level}"
                 )
 
         # ========================================================
@@ -2631,10 +2880,10 @@ else:
             )
 
             st.info(
-                "AI는 ① 내용의 이해도, "
-                "② 작성의 충실도, "
-                "③ 감상의 깊이를 평가합니다. "
-                "④ 작성 횟수는 실제 제출 횟수로 자동 계산됩니다."
+                f"현재 평가: **{active_assessment['평가명']}** "
+                f"({active_assessment['학년도']}학년도 {active_assessment['학기']}학기)\n\n"
+                "AI는 setting 시트의 루브릭에 따라 내용 기준을 평가하고, "
+                "작성 횟수는 실제 제출 횟수와 해당 루브릭을 기준으로 자동 계산합니다."
             )
 
             # ----------------------------------------------------
@@ -2774,25 +3023,18 @@ else:
 
                             ai_result = run_ai_evaluation(
                                 student_name,
-                                records
+                                records,
+                                active_rubric
                             )
 
                             ai_understanding = int(
-                                ai_result[
-                                    "내용이해_점수"
-                                ]
+                                ai_result["understanding"]
                             )
-
                             ai_completeness = int(
-                                ai_result[
-                                    "작성충실도_점수"
-                                ]
+                                ai_result["completeness"]
                             )
-
                             ai_depth = int(
-                                ai_result[
-                                    "감상의깊이_점수"
-                                ]
+                                ai_result["depth"]
                             )
 
                             ai_total = (
@@ -2802,26 +3044,8 @@ else:
                                 + automatic_count_score
                             )
 
-                            ai_reason = (
-                                "① 내용의 이해도\n"
-                                + ai_result[
-                                    "내용이해_근거"
-                                ]
-                                + "\n\n"
-                                + "② 작성의 충실도\n"
-                                + ai_result[
-                                    "작성충실도_근거"
-                                ]
-                                + "\n\n"
-                                + "③ 감상의 깊이\n"
-                                + ai_result[
-                                    "감상의깊이_근거"
-                                ]
-                            )
-
-                            ai_feedback = ai_result[
-                                "종합피드백"
-                            ]
+                            ai_reason = ai_result["reason"]
+                            ai_feedback = ai_result["feedback"]
 
                             # AI 결과를 session_state에 저장
                             st.session_state[
@@ -2886,6 +3110,25 @@ else:
                 ]
 
             # ----------------------------------------------------
+            # 현재 평가의 AI 평가 기준 / 점수 설정
+            # ----------------------------------------------------
+
+            ai_criteria_rows = []
+            for _, rubric_row in active_rubric.iterrows():
+                criterion_name = safe_str(rubric_row.get("평가기준"))
+                if "작성 횟수" not in criterion_name and "작성횟수" not in criterion_name:
+                    ai_criteria_rows.append(rubric_row)
+
+            ai_criteria_rows = ai_criteria_rows[:3]
+            score_options_by_criterion = [
+                rubric_score_options(row)
+                for row in ai_criteria_rows
+            ]
+
+            while len(score_options_by_criterion) < 3:
+                score_options_by_criterion.append([10])
+
+            # ----------------------------------------------------
             # AI 점수 표시
             # ----------------------------------------------------
 
@@ -2916,19 +3159,19 @@ else:
 
                     st.metric(
                         "① 내용의 이해도",
-                        f"{ai_understanding} / 25"
+                        f"{ai_understanding} / {max(score_options_by_criterion[0]) if score_options_by_criterion[0] else 0}"
                     )
 
                     st.metric(
                         "② 작성의 충실도",
-                        f"{ai_completeness} / 25"
+                        f"{ai_completeness} / {max(score_options_by_criterion[1]) if score_options_by_criterion[1] else 0}"
                     )
 
                 with a2:
 
                     st.metric(
                         "③ 감상의 깊이",
-                        f"{ai_depth} / 25"
+                        f"{ai_depth} / {max(score_options_by_criterion[2]) if score_options_by_criterion[2] else 0}"
                     )
 
                     st.metric(
@@ -2974,30 +3217,37 @@ else:
                 "AI 추천 점수를 검토한 뒤 선생님이 최종 점수를 직접 수정할 수 있습니다."
             )
 
-            score_options = [
-                25,
-                20,
-                15,
-                10
+            ai_criteria_rows = []
+            for _, rubric_row in active_rubric.iterrows():
+                criterion_name = safe_str(rubric_row.get("평가기준"))
+                if "작성 횟수" not in criterion_name and "작성횟수" not in criterion_name:
+                    ai_criteria_rows.append(rubric_row)
+
+            ai_criteria_rows = ai_criteria_rows[:3]
+            score_options_by_criterion = [
+                rubric_score_options(row)
+                for row in ai_criteria_rows
             ]
 
             # ----------------------------------------------------
             # 교사 점수 - 버튼 선택 방식
             # ----------------------------------------------------
 
-            def score_button_selector(label, current_value, state_key):
-                """10/15/20/25점 중 하나를 버튼으로 선택합니다."""
+            def score_button_selector(label, current_value, state_key, score_options):
+                """선택된 평가 루브릭의 점수 중 하나를 버튼으로 선택합니다."""
+                if not score_options:
+                    score_options = [10]
 
                 if state_key not in st.session_state:
                     st.session_state[state_key] = (
                         current_value
                         if current_value in score_options
-                        else 10
+                        else score_options[0]
                     )
 
                 st.markdown(f"**{label}**")
 
-                button_cols = st.columns(4)
+                button_cols = st.columns(len(score_options))
 
                 for col, score in zip(button_cols, score_options):
                     with col:
@@ -3014,29 +3264,43 @@ else:
                             st.session_state[state_key] = score
 
                 selected_score = st.session_state[state_key]
+                max_score = max(score_options)
 
                 st.caption(
-                    f"현재 선택: **{selected_score}점 / 25점**"
+                    f"현재 선택: **{selected_score}점 / {max_score}점**"
                 )
-
                 return selected_score
 
+            criterion_labels = [
+                safe_str(row.get("평가기준"))
+                for row in ai_criteria_rows
+            ]
+
+            while len(criterion_labels) < 3:
+                criterion_labels.append(f"평가기준 {len(criterion_labels)+1}")
+
+            while len(score_options_by_criterion) < 3:
+                score_options_by_criterion.append([10])
+
             teacher_understanding = score_button_selector(
-                "① 내용의 이해도",
+                f"① {criterion_labels[0]}",
                 teacher_understanding,
-                f"teacher_understanding_{evaluation_id}"
+                f"teacher_understanding_{evaluation_id}_{active_assessment_id}",
+                score_options_by_criterion[0]
             )
 
             teacher_completeness = score_button_selector(
-                "② 작성의 충실도",
+                f"② {criterion_labels[1]}",
                 teacher_completeness,
-                f"teacher_completeness_{evaluation_id}"
+                f"teacher_completeness_{evaluation_id}_{active_assessment_id}",
+                score_options_by_criterion[1]
             )
 
             teacher_depth = score_button_selector(
-                "③ 감상의 깊이",
+                f"③ {criterion_labels[2]}",
                 teacher_depth,
-                f"teacher_depth_{evaluation_id}"
+                f"teacher_depth_{evaluation_id}_{active_assessment_id}",
+                score_options_by_criterion[2]
             )
 
             # ----------------------------------------------------
@@ -3077,7 +3341,7 @@ else:
                     <div class="score-number">
                         {final_score}
                         <span style="font-size:16px;">
-                        / 100점
+                        / {sum(max(opts) if opts else 0 for opts in score_options_by_criterion) + (max([int(float(safe_str(get_submission_criterion(active_rubric).get(c)))) for c in ["매우우수점수", "우수점수", "보통점수", "노력요함점수"] if safe_str(get_submission_criterion(active_rubric).get(c))] or [0]))}점
                         </span>
                     </div>
                 </div>
@@ -3133,7 +3397,8 @@ else:
                         final_score,
                         ai_reason,
                         ai_feedback,
-                        teacher_feedback
+                        teacher_feedback,
+                        active_assessment_id
                     )
 
                     st.cache_data.clear()
